@@ -88,6 +88,15 @@ class RegisterController extends GetxController {
   bool get isRegisterExplicitlyDisabled => registerEnabled.value == false;
 
   Future<void> register() async {
+    if (isRegisterExplicitlyDisabled) {
+      Get.snackbar(
+        '提示',
+        '当前服务端未开放注册',
+        duration: const Duration(seconds: 2),
+      );
+      return;
+    }
+
     autoValidateMode.value = AutovalidateMode.onUserInteraction;
     final apiBaseUrlInput = _prepareApiBaseUrlInput(showSnackbar: true);
     if (apiBaseUrlInput == null) {
@@ -103,6 +112,13 @@ class RegisterController extends GetxController {
       await _syncApiBaseUrl(apiBaseUrlInput);
       final status = await refreshRegisterStatus(showSnackbarOnFailure: true);
       if (status != true) {
+        if (status == false) {
+          Get.snackbar(
+            '提示',
+            '当前服务端未开放注册',
+            duration: const Duration(seconds: 2),
+          );
+        }
         return;
       }
 

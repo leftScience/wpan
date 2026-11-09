@@ -380,63 +380,71 @@ class _SubmitButton extends GetView<RegisterController> {
 
   @override
   Widget build(BuildContext context) {
-    final isBusy =
-        controller.isLoading.value || controller.isCheckingRegisterStatus.value;
-    final isDisabled =
-        controller.isLoading.value || controller.isRegisterExplicitlyDisabled;
+    return Obx(() {
+      final isBusy =
+          controller.isLoading.value ||
+          controller.isCheckingRegisterStatus.value;
+      final isDisabled =
+          controller.isLoading.value || controller.isRegisterExplicitlyDisabled;
+      final buttonLabel = controller.isRegisterExplicitlyDisabled
+          ? '当前服务端未开放注册'
+          : '创建账号';
 
-    return Container(
-      width: double.infinity,
-      height: 52.h,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16.r),
-        gradient: LinearGradient(
-          colors: isDisabled
-              ? const [Color(0xFFCBD5E1), Color(0xFFB4C0D3)]
-              : const [Color(0xFF3B82F6), Color(0xFF2563EB)],
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color:
-                (isDisabled ? const Color(0xFFCBD5E1) : const Color(0xFF3B82F6))
-                    .withValues(alpha: 0.3),
-            blurRadius: 12.r,
-            offset: Offset(0, 4.h),
+      return Container(
+        width: double.infinity,
+        height: 52.h,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16.r),
+          gradient: LinearGradient(
+            colors: isDisabled
+                ? const [Color(0xFFCBD5E1), Color(0xFFB4C0D3)]
+                : const [Color(0xFF3B82F6), Color(0xFF2563EB)],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
           ),
-        ],
-      ),
-      child: ElevatedButton(
-        onPressed: isDisabled ? null : controller.register,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          disabledBackgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.r),
-          ),
+          boxShadow: [
+            BoxShadow(
+              color:
+                  (isDisabled
+                          ? const Color(0xFFCBD5E1)
+                          : const Color(0xFF3B82F6))
+                      .withValues(alpha: 0.3),
+              blurRadius: 12.r,
+              offset: Offset(0, 4.h),
+            ),
+          ],
         ),
-        child: isBusy
-            ? SizedBox(
-                width: 24.sp,
-                height: 24.sp,
-                child: const CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+        child: ElevatedButton(
+          onPressed: controller.isLoading.value ? null : controller.register,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            disabledBackgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16.r),
+            ),
+          ),
+          child: isBusy
+              ? SizedBox(
+                  width: 24.sp,
+                  height: 24.sp,
+                  child: const CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                )
+              : Text(
+                  buttonLabel,
+                  style: TextStyle(
+                    fontSize: 16.sp,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    letterSpacing: 1.2,
+                  ),
                 ),
-              )
-            : Text(
-                '创建账号',
-                style: TextStyle(
-                  fontSize: 16.sp,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                  letterSpacing: 1.2,
-                ),
-              ),
-      ),
-    );
+        ),
+      );
+    });
   }
 }
 
