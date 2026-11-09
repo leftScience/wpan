@@ -111,7 +111,7 @@ func (m *UserService) DeleteUserById(iCommonIDDTO *dto.CommonIDDTO, loginUser mo
 		return errors.New("用户 ID 无效")
 	}
 
-	return global.DB.Transaction(func(tx *gorm.DB) error {
+	if err := global.DB.Transaction(func(tx *gorm.DB) error {
 		target, err := userDao.GetUserByIdWithDB(tx, iCommonIDDTO.ID)
 		if err != nil {
 			return err
@@ -128,9 +128,6 @@ func (m *UserService) DeleteUserById(iCommonIDDTO *dto.CommonIDDTO, loginUser mo
 				return errors.New("至少需要保留一个超级管理员")
 			}
 		}
-		if err := (&QuarkFsService{}).DeleteUserScopedRoots(target.ID); err != nil {
-			return err
-		}
 		if err := quarkAutoSaveTaskDao.DeleteByOwnerUserIDWithDB(tx, target.ID); err != nil {
 			return err
 		}
@@ -144,7 +141,16 @@ func (m *UserService) DeleteUserById(iCommonIDDTO *dto.CommonIDDTO, loginUser mo
 			return err
 		}
 		return userDao.DeleteUserByIdWithDB(tx, iCommonIDDTO.ID)
-	})
+	}); err != nil {
+		return err
+	}
+	// 异步清理夸克侧 WP/{type}/{userId}，失败仅打日志不阻断已提交的删除。
+	go func() {
+		if err := (&QuarkFsService{}).DeleteUserScopedRoots(iCommonIDDTO.ID); err != nil && global.Logger != nil {
+			global.Logger.Warnf("删除用户 %d 的隔离目录失败: %v", iCommonIDDTO.ID, err)
+		}
+	}()
+	return nil
 }
 
 func (m *UserService) UpdateUser(iUserUpdateDTO *dto.UserUpdateDTO, loginUser model.LoginUser) error {

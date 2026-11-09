@@ -619,18 +619,15 @@ func (s *QuarkFsService) DeleteUserScopedRoots(userID uint) error {
 	}
 
 	// 删除用户时只清理 WP/{类型}/{userId}，绝不碰共享根目录。
-	// Cookie：优先该用户独享凭证；没有则回退全局（兼容历史独享目录仍在共享号下的情况）。
-	client, err := newManagedQuarkClientForUser(userID)
+	// 调用方在 DB 事务提交后才调本函数 → sys_user_config 已删，
+	// 按 userID 读独享凭证必定 ErrQuarkLoginRequired，直接用全局凭证清理
+	// 历史独享目录（仍在共享号下）。
+	client, err := newManagedQuarkClientForUser(0)
 	if err != nil {
-		if !errors.Is(err, ErrQuarkLoginRequired) {
-			return err
-		}
-		client, err = newManagedQuarkClientForUser(0)
-		if err != nil {
-			return err
-		}
+		return err
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(30*time.Second))
+	defer cancel()
 	seen := make(map[string]struct{}, len(configs))
 
 	for i := range configs {

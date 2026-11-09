@@ -43,8 +43,16 @@ func InitDB() (*gorm.DB, error) {
 		return nil, err
 	}
 	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(viper.GetInt("DB.MaxOpenConns"))
-	sqlDB.SetMaxIdleConns(viper.GetInt("DB.MaxIdleConns"))
+	if driver == "sqlite" {
+		// SQLite 单写锁：连接池必须串行，否则多连接并发写直接 "database is locked"，
+		// 慢事务（旧删除用户把夸克网络请求塞事务内）一拖就把整库锁死，
+		// 鉴权中间件读不到用户直接 401 踢登录。
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+	} else {
+		sqlDB.SetMaxOpenConns(viper.GetInt("DB.MaxOpenConns"))
+		sqlDB.SetMaxIdleConns(viper.GetInt("DB.MaxIdleConns"))
+	}
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	if driver == "sqlite" {
@@ -145,7 +153,9 @@ func resolveSQLiteFilePath(dsn string) (string, bool) {
 func applySQLitePragmas(db *gorm.DB) error {
 	pragmas := []string{
 		"PRAGMA foreign_keys = ON",
-		"PRAGMA busy_timeout = 5000",
+		"PRAGMA busy_timeout = 15000",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA synchronous = NORMAL",
 	}
 	for _, pragma := range pragmas {
 		if err := db.Exec(pragma).Error; err != nil {
