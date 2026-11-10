@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:get/get.dart';
 
 import '../../utils/http_client.dart';
 import '../models/app_update_info.dart';
@@ -12,7 +13,9 @@ class AppUpdateApi {
   final HttpClient _httpClient;
 
   Future<AppUpdateInfo> fetchManifest({required String manifestUrl}) async {
-    final candidates = _splitCandidateUrls(manifestUrl);
+    final candidates = _expandPlatformCandidateUrls(
+      _splitCandidateUrls(manifestUrl),
+    );
     if (candidates.isEmpty) {
       throw ApiException('未配置更新地址');
     }
@@ -36,13 +39,35 @@ class AppUpdateApi {
 
   Future<AppUpdateInfo> _parseManifest(Map<String, dynamic> data) async {
     final payload = _pickPlatformPayload(data);
-    final selectedArtifact = await _pickBestAndroidArtifact(payload);
+    final selectedArtifact = GetPlatform.isAndroid
+        ? await _pickBestAndroidArtifact(payload)
+        : null;
     final sourcePayload = selectedArtifact?.payload ?? payload;
-    final apkUrls = _readDownloadUrls(sourcePayload, payload);
-    if (apkUrls.isEmpty) {
-      throw ApiException('更新配置缺少 apkUrl');
+    final downloadUrls = _readDownloadUrls(sourcePayload, payload);
+    final releasePageUrl =
+        _readFirstNonEmptyString(sourcePayload, const [
+          'releasePageUrl',
+          'release_page_url',
+          'pageUrl',
+          'page_url',
+          'htmlUrl',
+          'html_url',
+        ]) ??
+        _readFirstNonEmptyString(payload, const [
+          'releasePageUrl',
+          'release_page_url',
+          'pageUrl',
+          'page_url',
+          'htmlUrl',
+          'html_url',
+        ]);
+    if (downloadUrls.isEmpty &&
+        (releasePageUrl == null || releasePageUrl.isEmpty)) {
+      throw ApiException('更新配置缺少下载地址');
     }
-    final apkUrl = apkUrls.first;
+    final primaryUrl = downloadUrls.isNotEmpty
+        ? downloadUrls.first
+        : releasePageUrl!;
 
     final versionName =
         _readFirstNonEmptyString(sourcePayload, const [
@@ -108,12 +133,13 @@ class AppUpdateApi {
         _readFirstBool(payload, const ['forceUpdate', 'force_update', 'force']);
 
     return AppUpdateInfo(
-      apkUrl: apkUrl,
-      apkUrls: apkUrls,
+      apkUrl: primaryUrl,
+      apkUrls: downloadUrls,
       versionName: versionName,
       versionCode: versionCode,
       sha256checksum: sha256,
       artifactKey: selectedArtifact?.key,
+      releasePageUrl: releasePageUrl,
       releaseNotes: releaseNotes,
       forceUpdate: forceUpdate ?? false,
     );
@@ -222,6 +248,8 @@ class AppUpdateApi {
     return _readUrlsFromPayload(payload, const [
           'apkUrls',
           'apk_urls',
+          'ipaUrls',
+          'ipa_urls',
           'downloadUrls',
           'download_urls',
           'urls',
@@ -229,6 +257,8 @@ class AppUpdateApi {
         _readFirstNonEmptyString(payload, const [
               'apkUrl',
               'apk_url',
+              'ipaUrl',
+              'ipa_url',
               'downloadUrl',
               'download_url',
               'url',
@@ -253,6 +283,8 @@ class AppUpdateApi {
       _readUrlsFromPayload(sourcePayload, const [
         'apkUrls',
         'apk_urls',
+        'ipaUrls',
+        'ipa_urls',
         'downloadUrls',
         'download_urls',
         'urls',
@@ -261,6 +293,8 @@ class AppUpdateApi {
     final sourcePrimary = _readFirstNonEmptyString(sourcePayload, const [
       'apkUrl',
       'apk_url',
+      'ipaUrl',
+      'ipa_url',
       'downloadUrl',
       'download_url',
       'url',
@@ -271,6 +305,8 @@ class AppUpdateApi {
       _readUrlsFromPayload(rootPayload, const [
         'apkUrls',
         'apk_urls',
+        'ipaUrls',
+        'ipa_urls',
         'downloadUrls',
         'download_urls',
         'urls',
@@ -279,6 +315,8 @@ class AppUpdateApi {
     final rootPrimary = _readFirstNonEmptyString(rootPayload, const [
       'apkUrl',
       'apk_url',
+      'ipaUrl',
+      'ipa_url',
       'downloadUrl',
       'download_url',
       'url',
@@ -331,6 +369,41 @@ class AppUpdateApi {
     return result;
   }
 
+  static List<String> _expandPlatformCandidateUrls(List<String> candidates) {
+    final result = <String>[];
+    void append(String? raw) {
+      final text = raw?.trim();
+      if (text == null || text.isEmpty || result.contains(text)) return;
+      result.add(text);
+    }
+
+    for (final candidate in candidates) {
+      if (GetPlatform.isIOS) {
+        if (candidate.endsWith('/android/android.json')) {
+          append(
+            '${candidate.substring(0, candidate.length - '/android/android.json'.length)}/ios/ios.json',
+          );
+        } else if (candidate.endsWith('/android.json')) {
+          append(
+            '${candidate.substring(0, candidate.length - '/android.json'.length)}/ios.json',
+          );
+        }
+      } else if (GetPlatform.isAndroid) {
+        if (candidate.endsWith('/ios/ios.json')) {
+          append(
+            '${candidate.substring(0, candidate.length - '/ios/ios.json'.length)}/android/android.json',
+          );
+        } else if (candidate.endsWith('/ios.json')) {
+          append(
+            '${candidate.substring(0, candidate.length - '/ios.json'.length)}/android.json',
+          );
+        }
+      }
+      append(candidate);
+    }
+    return result;
+  }
+
   static Map<String, dynamic>? _asMap(dynamic value) {
     if (value is Map<String, dynamic>) return value;
     if (value is Map) return value.cast<String, dynamic>();
@@ -350,14 +423,13 @@ class AppUpdateApi {
   }
 
   static Map<String, dynamic> _pickPlatformPayload(Map<String, dynamic> value) {
-    final android = _asMap(value['android']);
-    if (android != null) return android;
+    final platformKey = GetPlatform.isIOS ? 'ios' : 'android';
+    final direct = _asMap(value[platformKey]);
+    if (direct != null) return direct;
 
     final platforms = _asMap(value['platforms']);
-    final platformAndroid = platforms == null
-        ? null
-        : _asMap(platforms['android']);
-    if (platformAndroid != null) return platformAndroid;
+    final nested = platforms == null ? null : _asMap(platforms[platformKey]);
+    if (nested != null) return nested;
 
     return value;
   }

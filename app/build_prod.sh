@@ -156,13 +156,14 @@ fi
 if [[ "$APK_SPLIT_PER_ABI" == "1" ]]; then
   BUILD_ARGS+=(--split-per-abi)
   ABI_OUTPUTS=(
-    "arm64-v8a:app-arm64-v8a-release.apk"
+    "arm64-v8a:wpan-release-arm64-v8a.apk"
   )
-  APK_FILENAME="app-${DEFAULT_SPLIT_ABI}-release.apk"
+  FLUTTER_APK_FILENAME="app-${DEFAULT_SPLIT_ABI}-release.apk"
 else
-  APK_FILENAME="app-release.apk"
+  FLUTTER_APK_FILENAME="app-release.apk"
 fi
 
+APK_FILENAME="wpan-release-${DEFAULT_SPLIT_ABI}.apk"
 APK_RELATIVE_PATH="$OUTPUT_DIR/$APK_FILENAME"
 
 echo ""
@@ -224,6 +225,8 @@ if [[ $? -ne 0 ]]; then
   echo "[ERROR] flutter build apk failed."
   exit 1
 fi
+
+cp "$OUTPUT_DIR/$FLUTTER_APK_FILENAME" "$APK_RELATIVE_PATH"
 
 write_metadata
 

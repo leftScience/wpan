@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -17,6 +18,7 @@ import '../../../utils/app_env.dart';
 import '../../../utils/media_path.dart';
 import '../../../utils/quark_error_helper.dart';
 import '../../../data/storage/playback_progress_storage.dart';
+import '../../../data/storage/player_preferences_storage.dart';
 import '../../../data/storage/skip_settings_storage.dart';
 import '../../video_cast/views/video_cast_view.dart';
 import '../../music_player/controllers/music_player_controller.dart';
@@ -95,6 +97,15 @@ class PlayerController extends GetxController {
   final RxString globalPlaybackProxyMode = _defaultPlaybackProxyMode.obs;
   final RxnString currentPlaybackProxyModeOverride = RxnString();
 
+  final PlayerPreferencesStorage _playerPreferencesStorage =
+      PlayerPreferencesStorage();
+  String? _preferredPlaybackProxyMode;
+  /// 解码模式：auto / hw / sw。必须是 Rx，设置面板的 Obx 依赖它。
+  final RxString decodeMode = 'auto'.obs;
+  double? _preferredPlaybackRate;
+  Future<void>? _playerPreferencesFuture;
+  Future<void>? _decodeModeAppliedFuture;
+
   bool _autoNextRunning = false;
   Duration? _pendingSeek;
   Duration? _lastPersistedPosition;
@@ -104,6 +115,20 @@ class PlayerController extends GetxController {
   String? _openingEpisodeUrl;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
+  StreamSubscription<String>? _errorSubscription;
+  bool _proxyModeFallbackApplied = false;
+  bool _decodeFallbackApplied = false;
+  String? _last302TargetUrl;
+  String? _last302ErrorMessage;
+
+  String _describe302Target() {
+    final message = _last302ErrorMessage;
+    if (message != null && message.isNotEmpty) return message;
+    final target = _last302TargetUrl;
+    if (target == null || target.isEmpty) return '未获取到直链';
+    final short = target.length > 80 ? target.substring(0, 80) : target;
+    return '直链：$short';
+  }
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<double>? _rateSubscription;
@@ -140,13 +165,29 @@ class PlayerController extends GetxController {
   bool get isCasting => _castService.isCasting.value;
   String get castingDeviceName => _castService.currentDeviceName.value.trim();
   String get effectivePlaybackProxyMode =>
-      currentPlaybackProxyModeOverride.value ?? globalPlaybackProxyMode.value;
+      currentPlaybackProxyModeOverride.value ??
+      _preferredPlaybackProxyMode ??
+      globalPlaybackProxyMode.value;
   String get effectivePlaybackProxyModeLabel {
     switch (effectivePlaybackProxyMode) {
       case '302_redirect':
         return '302';
       default:
         return '本地代理';
+    }
+  }
+
+  /// auto = mpv 自动（iOS 上优先 VideoToolbox）；hw = 强制硬解；sw = 软解。
+  String get effectiveDecodeMode => decodeMode.value;
+
+  String get decodeModeLabel {
+    switch (effectiveDecodeMode) {
+      case 'hw':
+        return '硬解';
+      case 'sw':
+        return '软解';
+      default:
+        return '自动';
     }
   }
 
@@ -299,6 +340,13 @@ class PlayerController extends GetxController {
     return '当前视频';
   }
 
+  /// 302 直链需要夸克 TV 的 UA/Referer。
+  Map<String, String> get playbackHttpHeaders => const <String, String>{
+    'User-Agent':
+        'Mozilla/5.0 (Linux; U; Android 13; zh-cn; M2004J7AC Build/UKQ1.231108.001) AppleWebKit/533.1 (KHTML, like Gecko) Mobile Safari/533.1',
+    'Referer': 'https://pan.quark.cn/',
+  };
+
   Episode? get _currentEpisode {
     final index = currentIndex.value;
     if (index < 0 || index >= episodes.length) return null;
@@ -312,16 +360,20 @@ class PlayerController extends GetxController {
         _providedProgressStorage ??
         PlaybackProgressStorage(applicationType: _applicationType);
     _globalPlaybackProxyModeFuture = _loadGlobalPlaybackProxyMode();
+    _playerPreferencesFuture = _loadPlayerPreferences();
     handleRouteArguments(Get.arguments);
   }
 
   @override
   void onReady() {
     super.onReady();
+    unawaited(_applyMpvColorPipeline());
+    unawaited(_ensureDecodeModeApplied());
     _playingSubscription = player.stream.playing.listen(_handlePlayingChanged);
     _completedSubscription = player.stream.completed.listen(
       _handleCompletedChanged,
     );
+    _errorSubscription = player.stream.error.listen(_handlePlaybackStreamError);
     _rateSubscription = player.stream.rate.listen((rate) {
       playbackRate.value = rate;
     });
@@ -427,6 +479,54 @@ class PlayerController extends GetxController {
   void _handlePlayingChanged(bool playing) {
     _updateAspectRatio();
     _syncWakelock(playing);
+    if (playing) {
+      _proxyModeFallbackApplied = false;
+      unawaited(_applyPreferredPlaybackRate());
+      return;
+    }
+    // Persist on pause as well as on stop/background so a normal pause always
+    // leaves a resume point.
+    unawaited(_persistPlaybackSnapshot());
+  }
+
+  void _handlePlaybackStreamError(String error) {
+    if (_looksLikeDecodeError(error) &&
+        !_decodeFallbackApplied &&
+        effectiveDecodeMode != 'sw') {
+      _decodeFallbackApplied = true;
+      decodeMode.value = 'sw';
+      unawaited(_playerPreferencesStorage.saveDecodeMode('sw'));
+      unawaited(_applyMpvDecodeMode());
+      unawaited(_restartCurrentEpisode());
+      Get.snackbar(
+        '视频解码失败',
+        '${error.trim()}\n（已自动切换到软解）',
+        duration: const Duration(seconds: 8),
+      );
+      return;
+    }
+    if (_proxyModeFallbackApplied) return;
+    if (effectivePlaybackProxyMode != '302_redirect') return;
+    _proxyModeFallbackApplied = true;
+    _preferredPlaybackProxyMode = 'native_proxy';
+    unawaited(_playerPreferencesStorage.saveProxyMode('native_proxy'));
+    unawaited(_restartCurrentEpisode());
+    Get.snackbar(
+      '302 播放失败',
+      '${error.trim()}\n${_describe302Target()}（已切换到本地代理）',
+      duration: const Duration(seconds: 8),
+    );
+  }
+
+  Future<void> _applyPreferredPlaybackRate() async {
+    await (_playerPreferencesFuture ?? Future<void>.value());
+    final rate = _preferredPlaybackRate;
+    if (rate == null || rate <= 0 || rate == 1.0) return;
+    if (isSpeedBoosting.value) return;
+    if ((player.state.rate - rate).abs() < 0.001) return;
+    try {
+      await player.setRate(rate);
+    } catch (_) {}
   }
 
   void _handleCompletedChanged(bool completed) {
@@ -437,6 +537,78 @@ class PlayerController extends GetxController {
   void _syncWakelock(bool playing) {
     final shouldEnable = playing;
     unawaited(shouldEnable ? WakelockPlus.enable() : WakelockPlus.disable());
+  }
+
+  /// Dolby Vision profile 5 sources arrive without a usable HDR fallback
+  /// layer; mpv renders them with shifted colours unless tone mapping is
+  /// configured explicitly.
+  Future<void> setDecodeMode(String mode, {bool persist = true}) async {
+    final normalized = _normalizeDecodeMode(mode);
+    if (normalized == effectiveDecodeMode) return;
+    decodeMode.value = normalized;
+    _decodeFallbackApplied = false;
+    if (persist) {
+      unawaited(_playerPreferencesStorage.saveDecodeMode(normalized));
+    }
+    await _applyMpvDecodeMode();
+    await _restartCurrentEpisode();
+  }
+
+  Future<void> _ensureDecodeModeApplied() {
+    return _decodeModeAppliedFuture ??= _applyPreferredDecodeMode();
+  }
+
+  Future<void> _applyPreferredDecodeMode() async {
+    await (_playerPreferencesFuture ?? Future<void>.value());
+    await _applyMpvDecodeMode();
+  }
+
+  Future<void> _applyMpvDecodeMode() async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    final value = switch (effectiveDecodeMode) {
+      'hw' => 'videotoolbox',
+      'sw' => 'no',
+      _ => 'auto-safe',
+    };
+    try {
+      await platform.setProperty('hwdec', value);
+    } catch (_) {}
+  }
+
+  String _normalizeDecodeMode(String? mode) {
+    switch ((mode ?? '').trim()) {
+      case 'hw':
+        return 'hw';
+      case 'sw':
+        return 'sw';
+      default:
+        return 'auto';
+    }
+  }
+
+  bool _looksLikeDecodeError(String error) {
+    final lower = error.toLowerCase();
+    return lower.contains('videotoolbox') ||
+        lower.contains('hwdec') ||
+        lower.contains('hardware decoder') ||
+        lower.contains('failed to initialize a decoder') ||
+        lower.contains('could not open codec') ||
+        lower.contains('could not initialize video') ||
+        lower.contains('failed to initialize video') ||
+        lower.contains('decoder initialization') ||
+        lower.contains('no video decoder') ||
+        lower.contains('decoder init');
+  }
+
+  Future<void> _applyMpvColorPipeline() async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.setProperty('tone-mapping', 'bt.2390');
+      await platform.setProperty('target-colorspace-hint', 'yes');
+      await platform.setProperty('hdr-compute-peak', 'yes');
+    } catch (_) {}
   }
 
   Future<void> stopPlayback() async {
@@ -465,6 +637,11 @@ class PlayerController extends GetxController {
     if (folder == null || folder.isEmpty) return;
     if (episodePath == null || episodePath.isEmpty) return;
 
+    final position = player.state.position;
+    // A pause fired before the first frame would otherwise overwrite an
+    // existing resume point with zero.
+    if (position <= Duration.zero) return;
+
     final current = _currentEpisode;
     final rawTitle = (current?.title ?? '').trim();
     final title = rawTitle.isNotEmpty ? rawTitle : _titleFromPath(episodePath);
@@ -473,7 +650,7 @@ class PlayerController extends GetxController {
       folderPath: folder,
       itemTitle: title,
       itemPath: episodePath,
-      position: player.state.position,
+      position: position,
     );
   }
 
@@ -595,7 +772,10 @@ class PlayerController extends GetxController {
       _lastPersistedPosition = null;
       _outroSkipTriggered = false;
       _pendingSeek = intro > Duration.zero ? intro : null;
-      await player.open(Media(url), play: false);
+      await player.open(
+        _mediaForUrl(await _resolve302TargetIfNeeded(url)),
+        play: false,
+      );
       if (subtitleToApply != null) {
         await player.setSubtitleTrack(subtitleToApply);
       }
@@ -608,8 +788,12 @@ class PlayerController extends GetxController {
     }
   }
 
-  Future<void> setPlaybackRate(double rate) async {
+  Future<void> setPlaybackRate(double rate, {bool persist = true}) async {
     if (rate <= 0) return;
+    if (persist) {
+      _preferredPlaybackRate = rate;
+      unawaited(_playerPreferencesStorage.savePlaybackRate(rate));
+    }
     try {
       await player.setRate(rate);
     } catch (_) {}
@@ -632,6 +816,8 @@ class PlayerController extends GetxController {
       return;
     }
 
+    _preferredPlaybackProxyMode = normalized;
+    unawaited(_playerPreferencesStorage.saveProxyMode(normalized));
     currentPlaybackProxyModeOverride.value = nextOverride;
     await _restartCurrentEpisode();
   }
@@ -767,7 +953,7 @@ class PlayerController extends GetxController {
     isSpeedBoosting.value = true;
     speedBoostRate.value = rate;
     _rateBeforeBoost = player.state.rate;
-    await setPlaybackRate(rate);
+    await setPlaybackRate(rate, persist: false);
   }
 
   Future<void> stopSpeedBoost() async {
@@ -776,10 +962,10 @@ class PlayerController extends GetxController {
     final restore = _rateBeforeBoost;
     _rateBeforeBoost = null;
     if (restore != null && restore > 0) {
-      await setPlaybackRate(restore);
+      await setPlaybackRate(restore, persist: false);
       return;
     }
-    await setPlaybackRate(1.0);
+    await setPlaybackRate(1.0, persist: false);
   }
 
   Future<void> setControlsLocked(bool locked) async {
@@ -911,6 +1097,53 @@ class PlayerController extends GetxController {
     }
   }
 
+  /// Quark TV transcoding URLs are only playable with the TV client identity.
+  /// When the user picks 302/redirect the player connects to Quark directly, so
+  /// the request has to carry the same UA and Referer the server uses.
+  Media _mediaForUrl(String url) {
+    if (effectivePlaybackProxyMode != '302_redirect') {
+      return Media(url);
+    }
+    return Media(url, httpHeaders: playbackHttpHeaders);
+  }
+
+  /// In 302 mode the player must talk to Quark itself, but ffmpeg drops custom
+  /// headers across redirects. Resolve the server's 302 first and hand ffmpeg
+  /// the final Quark URL so the TV UA/Referer reach Quark.
+  Future<String> _resolve302TargetIfNeeded(String url) async {
+    if (effectivePlaybackProxyMode != '302_redirect') return url;
+    if (!_isLocalProxyStreamUrl(url)) return url;
+    try {
+      final dio = Dio(
+        BaseOptions(
+          followRedirects: false,
+          validateStatus: (_) => true,
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 10),
+        ),
+      );
+      final response = await dio.get<dynamic>(url);
+      final payload = response.data;
+      if (payload is Map) {
+        final code = payload['code'];
+        final message = (payload['msg'] ?? '').toString().trim();
+        if (message.isNotEmpty && code != 200 && code != '200') {
+          _last302ErrorMessage = message;
+        }
+      }
+      final location = response.headers.value('location');
+      if (location != null && location.trim().isNotEmpty) {
+        final resolved = location.trim();
+        _last302TargetUrl = resolved;
+        _last302ErrorMessage = null;
+        return resolved;
+      }
+    } catch (_) {}
+    _last302TargetUrl = null;
+    return url;
+  }
+
   Future<void> playAt(
     int index, {
     bool forceReopen = false,
@@ -918,6 +1151,7 @@ class PlayerController extends GetxController {
     bool clearResume = false,
     SubtitleTrack? subtitleTrackOverride,
   }) async {
+    await _ensureDecodeModeApplied();
     await _ensureGlobalPlaybackProxyModeLoaded();
     if (index < 0 || index >= episodes.length) return;
     await _ensureSkipSettingsLoaded();
@@ -1003,7 +1237,10 @@ class PlayerController extends GetxController {
       _lastPersistedPosition = null;
       _outroSkipTriggered = false;
       _pendingSeek = pendingSeek > Duration.zero ? pendingSeek : null;
-      await player.open(Media(url), play: true);
+      await player.open(
+        _mediaForUrl(await _resolve302TargetIfNeeded(url)),
+        play: true,
+      );
       if (subtitleToApply != null) {
         await player.setSubtitleTrack(subtitleToApply);
       }
@@ -1687,8 +1924,26 @@ class PlayerController extends GetxController {
     }
   }
 
+  Future<void> _loadPlayerPreferences() async {
+    try {
+      final mode = await _playerPreferencesStorage.readProxyMode();
+      if (mode != null) {
+        _preferredPlaybackProxyMode = _normalizePlaybackProxyMode(mode);
+      }
+      final savedDecodeMode = await _playerPreferencesStorage.readDecodeMode();
+      if (savedDecodeMode != null) {
+        decodeMode.value = _normalizeDecodeMode(savedDecodeMode);
+      }
+      final rate = await _playerPreferencesStorage.readPlaybackRate();
+      if (rate != null) {
+        _preferredPlaybackRate = rate;
+      }
+    } catch (_) {}
+  }
+
   Future<void> _ensureGlobalPlaybackProxyModeLoaded() async {
     await (_globalPlaybackProxyModeFuture ?? Future<void>.value());
+    await (_playerPreferencesFuture ?? Future<void>.value());
   }
 
   Future<void> _restartCurrentEpisode() async {
@@ -2041,6 +2296,7 @@ class PlayerController extends GetxController {
     _durationSubscription?.cancel();
     _playingSubscription?.cancel();
     _completedSubscription?.cancel();
+    _errorSubscription?.cancel();
     _rateSubscription?.cancel();
     _widthSubscription?.cancel();
     _heightSubscription?.cancel();

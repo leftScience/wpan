@@ -6,6 +6,7 @@ class AppUpdateInfo {
     this.versionCode,
     this.sha256checksum,
     this.artifactKey,
+    this.releasePageUrl,
     this.forceUpdate = false,
     this.releaseNotes,
   }) : apkUrls = _normalizeApkUrls(apkUrl, apkUrls);
@@ -16,8 +17,30 @@ class AppUpdateInfo {
   final int? versionCode;
   final String? sha256checksum;
   final String? artifactKey;
+  final String? releasePageUrl;
   final bool forceUpdate;
   final String? releaseNotes;
+
+  String get downloadUrl => apkUrl;
+
+  List<String> get downloadUrls => apkUrls;
+
+  List<String> get externalDownloadCandidates {
+    final result = <String>[];
+    void append(String? raw) {
+      final text = raw?.trim();
+      if (text == null || text.isEmpty || result.contains(text)) return;
+      result.add(text);
+    }
+
+    // 优先打开发布页，方便用户查看版本说明并选择安装包。
+    append(releasePageUrl);
+    for (final url in apkUrls) {
+      append(url);
+    }
+    append(apkUrl);
+    return List.unmodifiable(result);
+  }
 
   String get displayVersion {
     final version = versionName.trim();
@@ -26,7 +49,7 @@ class AppUpdateInfo {
     return '$version+$versionCode';
   }
 
-  String buildDestinationFilename({String prefix = 'ohome'}) {
+  String buildDestinationFilename({String prefix = 'wpan'}) {
     final safeVersion = versionName.trim().isEmpty
         ? 'latest'
         : versionName.trim().replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');

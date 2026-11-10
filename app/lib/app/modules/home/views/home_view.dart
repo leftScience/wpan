@@ -36,7 +36,7 @@ class _HomeBodyState extends State<_HomeBody>
   static const double _collapseRange = 96;
 
   /// 0 = 展开，1 = 收起顶部区域。
-  double _progress = 0;
+  final ValueNotifier<double> _progressNotifier = ValueNotifier<double>(0);
 
   late final AnimationController _entranceController;
 
@@ -51,23 +51,31 @@ class _HomeBodyState extends State<_HomeBody>
 
   @override
   void dispose() {
+    _progressNotifier.dispose();
     _entranceController.dispose();
     super.dispose();
   }
 
   bool _onScroll(ScrollNotification notification) {
+    // The vertical feed lives inside a horizontal PageView, so the feed's
+    // notifications arrive with depth 1. Filtering on depth would stop the
+    // fold entirely; the axis check below already excludes the PageView.
     if (notification.metrics.axis != Axis.vertical) return false;
-    if (notification.metrics.pixels <= 0 && _progress > 0) {
-      setState(() => _progress = 0);
+    // iOS bouncing emits overscroll deltas while pulling down. Feeding those
+    // into the fold animation fights the gesture and shows up as jitter.
+    if (notification is OverscrollNotification) return false;
+    if (notification.metrics.pixels <= 0) {
+      if (_progressNotifier.value > 0) _progressNotifier.value = 0;
       return false;
     }
     if (notification is! ScrollUpdateNotification) return false;
     final delta = notification.scrollDelta;
     if (delta == null || delta == 0) return false;
 
-    final next = (_progress + delta / _collapseRange).clamp(0.0, 1.0);
-    if ((next - _progress).abs() < 0.002) return false;
-    setState(() => _progress = next);
+    final current = _progressNotifier.value;
+    final next = (current + delta / _collapseRange).clamp(0.0, 1.0);
+    if ((next - current).abs() < 0.002) return false;
+    _progressNotifier.value = next;
     return false;
   }
 
@@ -78,64 +86,75 @@ class _HomeBodyState extends State<_HomeBody>
       withHistoryBanner: true,
     );
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final t = disableAnimations
-        ? (_progress >= 0.5 ? 1.0 : 0.0)
-        : Curves.easeOutCubic.transform(_progress);
-    final sectionGap = lerpDouble(12.h, 0, t)!;
-    final chromeOpacity = (1 - t * 1.15).clamp(0.0, 1.0);
-    final chromeFactor = (1 - t).clamp(0.0, 1.0);
-    final chromeScale = lerpDouble(1.0, 0.96, t)!;
 
     return SafeArea(
       bottom: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: EdgeInsets.only(top: 12.h),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w),
-                  child: _buildHeader(),
-                ),
-                ClipRect(
-                  clipBehavior: chromeFactor >= 0.999
-                      ? Clip.none
-                      : Clip.hardEdge,
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    heightFactor: chromeFactor,
-                    child: Opacity(
-                      opacity: chromeOpacity,
-                      child: Transform.scale(
-                        scale: chromeScale,
+          ValueListenableBuilder<double>(
+            valueListenable: _progressNotifier,
+            builder: (context, progress, child) {
+              final t = disableAnimations
+                  ? (progress >= 0.5 ? 1.0 : 0.0)
+                  : Curves.easeOutCubic.transform(progress);
+              final sectionGap = lerpDouble(12.h, 0, t)!;
+              final chromeOpacity = (1 - t * 1.15).clamp(0.0, 1.0);
+              final chromeFactor = (1 - t).clamp(0.0, 1.0);
+              final chromeScale = lerpDouble(1.0, 0.96, t)!;
+
+              return Padding(
+                padding: EdgeInsets.only(top: 12.h),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16.w),
+                      child: _buildHeader(),
+                    ),
+                    ClipRect(
+                      clipBehavior: chromeFactor >= 0.999
+                          ? Clip.none
+                          : Clip.hardEdge,
+                      child: Align(
                         alignment: Alignment.topCenter,
-                        child: Padding(
-                          padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 10.h),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                height: sectionGap <= 0 ? 0 : sectionGap,
+                        heightFactor: chromeFactor,
+                        child: Opacity(
+                          opacity: chromeOpacity,
+                          child: Transform.scale(
+                            scale: chromeScale,
+                            alignment: Alignment.topCenter,
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                16.w,
+                                0,
+                                16.w,
+                                10.h,
                               ),
-                              _buildSearchBar(),
-                              SizedBox(
-                                height: sectionGap <= 0 ? 0 : sectionGap,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    height: sectionGap <= 0 ? 0 : sectionGap,
+                                  ),
+                                  _buildSearchBar(),
+                                  SizedBox(
+                                    height: sectionGap <= 0 ? 0 : sectionGap,
+                                  ),
+                                  _buildResourceMenu(
+                                    disableAnimations: disableAnimations,
+                                  ),
+                                ],
                               ),
-                              _buildResourceMenu(
-                                disableAnimations: disableAnimations,
-                              ),
-                            ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
           Expanded(
             child: Padding(

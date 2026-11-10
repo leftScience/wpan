@@ -120,7 +120,9 @@ class DiscoveryService {
   }
 
   Future<List<DiscoveredServer>> _discoverViaMdns() async {
-    if (!Platform.isAndroid) return const <DiscoveredServer>[];
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return const <DiscoveredServer>[];
+    }
 
     final client = MDnsClient();
     final discovered = <String, DiscoveredServer>{};
@@ -260,7 +262,7 @@ class DiscoveryService {
   }
 
   Future<_ActiveIpv4Cidr?> _getActiveIpv4Cidr() async {
-    if (!Platform.isAndroid) return null;
+    if (!Platform.isAndroid && !Platform.isIOS) return null;
 
     try {
       final payload = await _networkChannel.invokeMapMethod<String, dynamic>(

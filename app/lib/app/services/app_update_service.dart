@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
 import 'package:ota_update/ota_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -33,12 +35,20 @@ class AppUpdateService extends GetxService {
   AppUpdateService({AppUpdateApi? appUpdateApi})
     : _appUpdateApi = appUpdateApi ?? AppUpdateApi();
 
+  static const MethodChannel _platformChannel = MethodChannel(
+    'ohome/network_info',
+  );
+
   final AppUpdateApi _appUpdateApi;
   PackageInfo? _packageInfo;
 
   final isUpdating = false.obs;
   final progress = RxnDouble();
   final statusText = ''.obs;
+
+  bool get supportsInAppInstall => GetPlatform.isAndroid;
+
+  bool get usesExternalDownloadPage => GetPlatform.isIOS;
 
   Future<String> getCurrentVersionLabel() async {
     final packageInfo = await _getPackageInfo();
@@ -56,7 +66,7 @@ class AppUpdateService extends GetxService {
       );
     }
 
-    if (!GetPlatform.isAndroid) {
+    if (!GetPlatform.isAndroid && !GetPlatform.isIOS) {
       return AppUpdateCheckResult(
         status: AppUpdateCheckStatus.unsupported,
         currentVersion: currentVersion,
@@ -88,9 +98,54 @@ class AppUpdateService extends GetxService {
     );
   }
 
+  Future<void> openDownloadPage(AppUpdateInfo info) async {
+    final candidates = info.externalDownloadCandidates;
+    if (candidates.isEmpty) {
+      throw ApiException('未找到可用的下载页面地址');
+    }
+
+    Object? lastError;
+    for (final candidate in candidates) {
+      try {
+        final opened = await _openExternalUrl(candidate);
+        if (opened) return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    await Clipboard.setData(ClipboardData(text: candidates.first));
+    if (lastError != null) {
+      throw ApiException('无法自动打开浏览器，已将下载链接复制到剪贴板（$lastError）');
+    }
+    throw ApiException('无法自动打开浏览器，已将下载链接复制到剪贴板');
+  }
+
+  Future<bool> _openExternalUrl(String rawUrl) async {
+    final url = rawUrl.trim();
+    if (url.isEmpty) return false;
+
+    try {
+      final opened = await _platformChannel.invokeMethod<bool>(
+        'openExternalUrl',
+        <String, dynamic>{'url': url},
+      );
+      if (opened == true) return true;
+    } catch (_) {
+      // Fall back to InAppBrowser.openWithSystemBrowser
+    }
+
+    await InAppBrowser.openWithSystemBrowser(url: WebUri(url));
+    return true;
+  }
+
   Future<void> startUpdate(AppUpdateInfo info) async {
     if (AppEnv.currentEnvironment == AppEnvironment.dev) {
       throw ApiException('开发环境已禁用在线更新');
+    }
+    if (GetPlatform.isIOS) {
+      await openDownloadPage(info);
+      return;
     }
     if (!GetPlatform.isAndroid) {
       throw ApiException('当前平台不支持 APK 在线更新');

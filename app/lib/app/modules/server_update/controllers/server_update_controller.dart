@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../../data/api/server_update.dart';
@@ -120,7 +121,10 @@ class ServerUpdateController extends GetxController {
     switch (result.status) {
       case AppUpdateCheckStatus.available:
         final notes = (result.info?.releaseNotes ?? '').trim();
-        return notes.isNotEmpty ? notes : '检测到新版本，点击“检查更新”后可直接选择安装。';
+        if (notes.isNotEmpty) return notes;
+        return _appUpdateService.usesExternalDownloadPage
+            ? '检测到新版本，点击“检查更新”可跳转下载页面获取最新安装包。'
+            : '检测到新版本，点击“检查更新”后可直接选择安装。';
       case AppUpdateCheckStatus.upToDate:
         return '当前已是最新版本（${result.currentVersion}）。';
       case AppUpdateCheckStatus.notConfigured:
@@ -313,6 +317,7 @@ class ServerUpdateController extends GetxController {
     required AppUpdateInfo info,
   }) async {
     final notes = (info.releaseNotes ?? '').trim();
+    final isExternalDownload = _appUpdateService.usesExternalDownloadPage;
     final confirm = await Get.dialog<bool>(
       AlertDialog(
         title: const Text('发现新版本'),
@@ -329,6 +334,13 @@ class ServerUpdateController extends GetxController {
               const SizedBox(height: 4),
               Text(notes),
             ],
+            if (isExternalDownload) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'iOS 端将跳转浏览器下载最新 IPA 安装包，下载后可通过巨魔或自签工具覆盖安装。',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
           ],
         ),
         actions: [
@@ -337,15 +349,32 @@ class ServerUpdateController extends GetxController {
               onPressed: () => Get.back(result: false),
               child: const Text('稍后'),
             ),
+          if (isExternalDownload)
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: info.downloadUrl));
+                Get.snackbar('已复制', '下载链接已复制到剪贴板');
+              },
+              child: const Text('复制链接'),
+            ),
           FilledButton(
             onPressed: () => Get.back(result: true),
-            child: const Text('更新'),
+            child: Text(isExternalDownload ? '前往下载' : '更新'),
           ),
         ],
       ),
       barrierDismissible: !info.forceUpdate,
     );
     if (confirm != true) return;
+
+    if (isExternalDownload) {
+      try {
+        await _appUpdateService.openDownloadPage(info);
+      } catch (error) {
+        Get.snackbar('提示', '$error');
+      }
+      return;
+    }
 
     await _startOtaUpdate(info);
   }

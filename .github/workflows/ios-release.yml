@@ -1,0 +1,220 @@
+name: iOS Release IPA
+
+on:
+  push:
+    tags:
+      - "app-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional release tag (e.g. app-v1.0.0) when triggered manually"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive release metadata
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RAW_TAG="${GITHUB_REF_NAME}"
+            IS_TAG_RELEASE="1"
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            RAW_TAG="${{ inputs.release_tag }}"
+            IS_TAG_RELEASE="0"
+          else
+            VERSION_LINE=$(grep -m1 '^version:' app/pubspec.yaml | cut -d':' -f2 | tr -d ' \r')
+            RAW_TAG="app-v${VERSION_LINE%%+*}"
+            IS_TAG_RELEASE="0"
+          fi
+
+          if [[ ! "${RAW_TAG}" =~ ^app-(v?[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?)$ ]]; then
+            echo "::error::Unsupported iOS release tag: ${RAW_TAG}"
+            echo "::error::Expected format: app-v<version> or app-<version>"
+            exit 1
+          fi
+
+          RELEASE_VERSION="${BASH_REMATCH[1]}"
+          {
+            echo "RELEASE_REF_NAME=${RAW_TAG}"
+            echo "RELEASE_VERSION=${RELEASE_VERSION}"
+            echo "IS_TAG_RELEASE=${IS_TAG_RELEASE}"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Prepare release settings
+        shell: bash
+        run: |
+          MINIO_ENDPOINT="${{ secrets.MINIO_ENDPOINT }}"
+          MINIO_ENDPOINT="${MINIO_ENDPOINT%/}"
+          MINIO_BUCKET="${{ secrets.MINIO_BUCKET }}"
+          MINIO_PUBLIC_BASE_URL="${{ secrets.MINIO_PUBLIC_BASE_URL }}"
+          MINIO_PUBLIC_BASE_URL="${MINIO_PUBLIC_BASE_URL%/}"
+          if [[ -z "${MINIO_PUBLIC_BASE_URL}" && -n "${MINIO_ENDPOINT}" && -n "${MINIO_BUCKET}" ]]; then
+            MINIO_PUBLIC_BASE_URL="${MINIO_ENDPOINT}/${MINIO_BUCKET}"
+          fi
+
+          GITHUB_IOS_MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/ios.json"
+          if [[ -n "${MINIO_PUBLIC_BASE_URL}" ]]; then
+            APP_UPDATE_MANIFEST_URL="${MINIO_PUBLIC_BASE_URL}/ios/ios.json,${GITHUB_IOS_MANIFEST_URL}"
+            HAS_MINIO="1"
+          else
+            APP_UPDATE_MANIFEST_URL="${GITHUB_IOS_MANIFEST_URL}"
+            HAS_MINIO="0"
+          fi
+          RELEASE_PREFIX="ios/releases/${RELEASE_REF_NAME}"
+
+          {
+            echo "MINIO_ENDPOINT=${MINIO_ENDPOINT}"
+            echo "MINIO_BUCKET=${MINIO_BUCKET}"
+            echo "MINIO_PUBLIC_BASE_URL=${MINIO_PUBLIC_BASE_URL}"
+            echo "GITHUB_IOS_MANIFEST_URL=${GITHUB_IOS_MANIFEST_URL}"
+            echo "APP_UPDATE_MANIFEST_URL=${APP_UPDATE_MANIFEST_URL}"
+            echo "RELEASE_PREFIX=${RELEASE_PREFIX}"
+            echo "HAS_MINIO=${HAS_MINIO}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build unsigned release IPA
+        working-directory: app
+        shell: bash
+        run: |
+          BUILD_METADATA_FILE="$RUNNER_TEMP/wpan-ios-release.env" \
+          CI_BUILD_NUMBER="${GITHUB_RUN_NUMBER}" \
+          RELEASE_TAG="${RELEASE_VERSION}" \
+          APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL}" \
+          bash build_ios.sh
+
+          cat "$RUNNER_TEMP/wpan-ios-release.env" >> "$GITHUB_ENV"
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          OUTPUT_DIR="app/build/ios/ipa"
+          MANIFEST_ASSET="${OUTPUT_DIR}/ios.json"
+          VERSIONED_MANIFEST_ASSET="${OUTPUT_DIR}/ios-${RELEASE_VERSION}.json"
+          CHECKSUM_ASSET="${OUTPUT_DIR}/checksums-ios.txt"
+          SOURCE_IPA="app/${IPA_RELATIVE_PATH}"
+          RELEASE_IPA="${OUTPUT_DIR}/wpan-release-unsigned.ipa"
+          GITHUB_IPA_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_REF_NAME}/wpan-release-unsigned.ipa"
+          GITHUB_RELEASE_PAGE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_REF_NAME}"
+
+          if [[ "$SOURCE_IPA" != "$RELEASE_IPA" ]]; then
+            cp "$SOURCE_IPA" "$RELEASE_IPA"
+          fi
+
+          IPA_SHA256=$(shasum -a 256 "$RELEASE_IPA" | awk '{print $1}')
+          printf '%s  %s\n' "$IPA_SHA256" "wpan-release-unsigned.ipa" > "$CHECKSUM_ASSET"
+
+          if [[ -n "${MINIO_PUBLIC_BASE_URL:-}" ]]; then
+            VERSIONED_IPA_URL="${MINIO_PUBLIC_BASE_URL}/${RELEASE_PREFIX}/wpan-release-unsigned.ipa"
+            PRIMARY_IPA_URL="${VERSIONED_IPA_URL}"
+            IPA_URLS_JSON="[\"${VERSIONED_IPA_URL}\", \"${GITHUB_IPA_URL}\"]"
+          else
+            PRIMARY_IPA_URL="${GITHUB_IPA_URL}"
+            IPA_URLS_JSON="[\"${GITHUB_IPA_URL}\"]"
+          fi
+
+          cat > "$MANIFEST_ASSET" <<EOF
+          {
+            "versionName": "${BUILD_NAME}",
+            "versionCode": ${BUILD_NUMBER},
+            "ipaUrl": "${PRIMARY_IPA_URL}",
+            "ipaUrls": ${IPA_URLS_JSON},
+            "downloadUrl": "${PRIMARY_IPA_URL}",
+            "downloadUrls": ${IPA_URLS_JSON},
+            "releasePageUrl": "${GITHUB_RELEASE_PAGE_URL}",
+            "sha256": "${IPA_SHA256}",
+            "releaseNotes": "Release ${RELEASE_VERSION}"
+          }
+          EOF
+          cp "$MANIFEST_ASSET" "$VERSIONED_MANIFEST_ASSET"
+
+      - name: Verify IPA internal version
+        shell: bash
+        run: |
+          IPA_PATH="app/build/ios/ipa/wpan-release-unsigned.ipa"
+          bash scripts/verify-ios-ipa-version.sh \
+            "$IPA_PATH" \
+            "${BUILD_NAME}" \
+            "${BUILD_NUMBER}"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpan-ios-${{ env.RELEASE_REF_NAME }}
+          path: |
+            app/build/ios/ipa/wpan-release-unsigned.ipa
+            app/build/ios/ipa/ios.json
+            app/build/ios/ipa/checksums-ios.txt
+
+      - name: Upload iOS assets to MinIO
+        if: env.IS_TAG_RELEASE == '1' && env.HAS_MINIO == '1'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            python3 -m pip install --user awscli
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+
+          aws configure set default.s3.addressing_style path
+
+          OUTPUT_DIR="app/build/ios/ipa"
+          VERSIONED_PREFIX="${RELEASE_PREFIX}"
+
+          aws s3 cp "${OUTPUT_DIR}/wpan-release-unsigned.ipa" \
+            "s3://${MINIO_BUCKET}/${VERSIONED_PREFIX}/wpan-release-unsigned.ipa" \
+            --endpoint-url "${MINIO_ENDPOINT}" \
+            --content-type "application/octet-stream" \
+            --cache-control "public,max-age=31536000,immutable"
+
+          aws s3 cp "${OUTPUT_DIR}/ios.json" \
+            "s3://${MINIO_BUCKET}/ios/ios.json" \
+            --endpoint-url "${MINIO_ENDPOINT}" \
+            --content-type "application/json" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+          aws s3 cp "${OUTPUT_DIR}/ios-${RELEASE_VERSION}.json" \
+            "s3://${MINIO_BUCKET}/${VERSIONED_PREFIX}/ios.json" \
+            --endpoint-url "${MINIO_ENDPOINT}" \
+            --content-type "application/json" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+          aws s3 cp "${OUTPUT_DIR}/checksums-ios.txt" \
+            "s3://${MINIO_BUCKET}/${VERSIONED_PREFIX}/checksums-ios.txt" \
+            --endpoint-url "${MINIO_ENDPOINT}" \
+            --content-type "text/plain; charset=utf-8" \
+            --cache-control "public,max-age=300"
+
+      - name: Publish GitHub Release
+        if: env.IS_TAG_RELEASE == '1'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            app/build/ios/ipa/wpan-release-unsigned.ipa
+            app/build/ios/ipa/ios.json
+            app/build/ios/ipa/checksums-ios.txt

@@ -9,7 +9,9 @@ class AppFloatingActionButtonPosition {
 
   static double get rightMargin => 20.w;
 
-  static double get bottomSpacing => 68.h;
+  // The floating tab bar is 60pt tall plus a 14pt bottom gap and the safe
+  // area; 68.h left the button overlapping it on 812pt-tall phones.
+  static double get bottomSpacing => 88.h;
 
   static double bottomOffset(BuildContext context) {
     return MediaQuery.paddingOf(context).bottom + bottomSpacing;

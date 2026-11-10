@@ -101,14 +101,14 @@ jobs:
         working-directory: app
         shell: bash
         run: |
-          BUILD_METADATA_FILE="$RUNNER_TEMP/ohome-release.env" \
+          BUILD_METADATA_FILE="$RUNNER_TEMP/wpan-release.env" \
           APK_SPLIT_PER_ABI=0 \
           CI_BUILD_NUMBER="${GITHUB_RUN_NUMBER}" \
           RELEASE_TAG="${RELEASE_VERSION}" \
           APP_UPDATE_MANIFEST_URL="${APP_UPDATE_MANIFEST_URL}" \
           bash build_prod.sh
 
-          cat "$RUNNER_TEMP/ohome-release.env" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/wpan-release.env" >> "$GITHUB_ENV"
 
       - name: Prepare release assets
         shell: bash
@@ -119,13 +119,15 @@ jobs:
           VERSIONED_MANIFEST_ASSET="app/build/app/outputs/flutter-apk/android-${RELEASE_VERSION}.json"
           CHECKSUM_ASSET="app/build/app/outputs/flutter-apk/checksums-android.txt"
           SOURCE_APK="app/${APK_RELATIVE_PATH}"
-          RELEASE_APK="${OUTPUT_DIR}/ohome-release-arm64-v8a.apk"
-          VERSIONED_APK_URL="${MINIO_PUBLIC_BASE_URL}/${RELEASE_PREFIX}/ohome-release-${ABI}.apk"
-          GITHUB_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_REF_NAME}/ohome-release-arm64-v8a.apk"
+          RELEASE_APK="${OUTPUT_DIR}/wpan-release-arm64-v8a.apk"
+          VERSIONED_APK_URL="${MINIO_PUBLIC_BASE_URL}/${RELEASE_PREFIX}/wpan-release-${ABI}.apk"
+          GITHUB_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_REF_NAME}/wpan-release-arm64-v8a.apk"
 
-          cp "$SOURCE_APK" "$RELEASE_APK"
+          if [[ "$SOURCE_APK" != "$RELEASE_APK" ]]; then
+            cp "$SOURCE_APK" "$RELEASE_APK"
+          fi
           APK_SHA256=$(shasum -a 256 "$RELEASE_APK" | awk '{print $1}')
-          printf '%s  %s\n' "$APK_SHA256" "ohome-release-arm64-v8a.apk" > "$CHECKSUM_ASSET"
+          printf '%s  %s\n' "$APK_SHA256" "wpan-release-arm64-v8a.apk" > "$CHECKSUM_ASSET"
 
           cat > "$MANIFEST_ASSET" <<EOF
           {
@@ -149,7 +151,7 @@ jobs:
       - name: Verify APK internal version
         shell: bash
         run: |
-          APK_PATH="app/build/app/outputs/flutter-apk/ohome-release-arm64-v8a.apk"
+          APK_PATH="app/build/app/outputs/flutter-apk/wpan-release-arm64-v8a.apk"
           bash scripts/verify-android-apk-version.sh \
             "$APK_PATH" \
             "${BUILD_NAME}" \
@@ -180,8 +182,8 @@ jobs:
           OUTPUT_DIR="app/build/app/outputs/flutter-apk"
           VERSIONED_PREFIX="${RELEASE_PREFIX}"
 
-          aws s3 cp "${OUTPUT_DIR}/ohome-release-arm64-v8a.apk" \
-            "s3://${MINIO_BUCKET}/${VERSIONED_PREFIX}/ohome-release-arm64-v8a.apk" \
+          aws s3 cp "${OUTPUT_DIR}/wpan-release-arm64-v8a.apk" \
+            "s3://${MINIO_BUCKET}/${VERSIONED_PREFIX}/wpan-release-arm64-v8a.apk" \
             --endpoint-url "${MINIO_ENDPOINT}" \
             --content-type "application/vnd.android.package-archive" \
             --cache-control "public,max-age=31536000,immutable"
@@ -212,6 +214,6 @@ jobs:
           overwrite_files: true
           fail_on_unmatched_files: true
           files: |
-            app/build/app/outputs/flutter-apk/ohome-release-arm64-v8a.apk
+            app/build/app/outputs/flutter-apk/wpan-release-arm64-v8a.apk
             app/build/app/outputs/flutter-apk/android.json
             app/build/app/outputs/flutter-apk/checksums-android.txt

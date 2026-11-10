@@ -13,6 +13,7 @@ import '../../../theme/app_theme.dart';
 import '../../../widgets/media_player_header_title.dart';
 import '../../../widgets/playlist_loading_view.dart';
 import '../../../services/android_pip_service.dart';
+import '../../../services/network_speed_service.dart';
 import '../controllers/player_controller.dart';
 
 class PlayerView extends StatefulWidget {
@@ -62,6 +63,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     );
     unawaited(_loadFullscreenGestureMediaState());
     controller.handleRouteArguments(Get.arguments);
+    Get.find<NetworkSpeedService>().start();
     _pipAspectRatioWorker = ever<double>(controller.videoAspectRatio, (_) {
       if (!controller.isFullscreen.value) return;
       unawaited(_syncPictureInPictureAvailability());
@@ -90,6 +92,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     unawaited(controller.setControlsLocked(false));
     unawaited(_resetGestureBrightness());
     unawaited(controller.stopPlayback());
+    Get.find<NetworkSpeedService>().stop();
     unawaited(SystemChrome.setPreferredOrientations([]));
     WidgetsBinding.instance.removeObserver(this);
     _episodeScrollController.dispose();
@@ -207,14 +210,30 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     final index = controller.currentIndex.value;
     if (index >= 0 && index < controller.episodes.length) {
       final episode = controller.episodes[index];
-      final title = episode.title.trim();
+      final title = _simplifyEpisodeTitle(episode.title);
       if (title.isNotEmpty) return title;
-      final subTitle = episode.subTitle.trim();
+      final subTitle = _simplifyEpisodeTitle(episode.subTitle);
       if (subTitle.isNotEmpty) return subTitle;
     }
     final resource = controller.resourceTitle.value.trim();
     if (resource.isNotEmpty) return resource;
     return '返回';
+  }
+
+  /// Release-group file names are long and noisy; show the episode number
+  /// instead of the full `2026.S01E01.2160p...mkv` string.
+  String _simplifyEpisodeTitle(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    final cn = RegExp(r'第\s*(\d+)\s*集').firstMatch(text);
+    if (cn != null) return '第${cn.group(1)}集';
+    final en = RegExp(r'[Ss](\d+)\s*[Ee](\d+)').firstMatch(text);
+    if (en != null) {
+      final episodeNumber = int.tryParse(en.group(2) ?? '');
+      return episodeNumber != null ? '第$episodeNumber集' : '第${en.group(2)}集';
+    }
+    if (text.length > 24) return '${text.substring(0, 24)}…';
+    return text;
   }
 
   Widget _buildFullscreenBackButton(VideoState state) {
@@ -287,6 +306,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
 
   List<Widget> _buildFullscreenTopButtonBar(VideoState state) {
     final items = <Widget>[_buildFullscreenBackButton(state), const Spacer()];
+    items.add(_buildNetworkSpeedBadge(compact: true));
     items.add(SizedBox(width: 8.w));
     items.add(_buildFullscreenEpisodeActions(state.context));
     items.add(SizedBox(width: 8.w));
@@ -434,6 +454,36 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   double _compactEpisodePanelWidth(MediaQueryData mediaQuery) {
     final screenWidth = mediaQuery.size.width;
     return math.min(420.0, math.max(280.0, screenWidth * 0.4));
+  }
+
+  Widget _buildNetworkSpeedBadge({bool compact = false}) {
+    if (!Get.isRegistered<NetworkSpeedService>()) {
+      return const SizedBox.shrink();
+    }
+    final service = Get.find<NetworkSpeedService>();
+    return Obx(() {
+      final rate = service.downloadBytesPerSecond.value;
+      if (rate <= 0) return const SizedBox.shrink();
+      return IgnorePointer(
+        child: Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 6.w : 8.w,
+            vertical: compact ? 2.h : 4.h,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(10.r),
+          ),
+          child: Text(
+            '↓ ${NetworkSpeedService.formatRate(rate)}',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: compact ? 10.sp : 11.sp,
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   Widget _buildInfoPill({
@@ -1248,6 +1298,72 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     );
   }
 
+  void _showDecodeModeSheet(
+    BuildContext context, {
+    bool fullscreenDrawer = false,
+  }) {
+    const options = <({String value, String title, String subtitle})>[
+      (value: 'auto', title: '自动', subtitle: '优先硬解，失败时由 mpv 自行回退'),
+      (value: 'hw', title: '硬解', subtitle: '硬件加速解码，省电发热低；部分编码兼容性较差'),
+      (value: 'sw', title: '软解', subtitle: 'CPU 解码，兼容性最好；高码率 4K 更耗电'),
+    ];
+
+    Widget buildBody(BuildContext ctx) {
+      return Obx(() {
+        final currentMode = controller.effectiveDecodeMode;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: options
+              .map((option) {
+                final selected = currentMode == option.value;
+                return _buildSheetOptionTile(
+                  context: ctx,
+                  title: option.title,
+                  subtitle: option.subtitle,
+                  selected: selected,
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    unawaited(controller.setDecodeMode(option.value));
+                  },
+                );
+              })
+              .toList(growable: false),
+        );
+      });
+    }
+
+    Widget buildContent(BuildContext ctx) {
+      return _buildStandardBottomSheet(
+        context: ctx,
+        title: '解码方式',
+        subtitle: '切换后会重载当前视频 · 当前：${controller.decodeModeLabel}',
+        child: buildBody(ctx),
+      );
+    }
+
+    if (fullscreenDrawer) {
+      _showFullscreenSideDrawer(
+        context,
+        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
+          child: _buildFullscreenDrawerSection(
+            title: '解码方式',
+            subtitle: '切换后会重载当前视频 · 当前：${controller.decodeModeLabel}',
+            child: buildBody(ctx),
+          ),
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => buildContent(ctx),
+    );
+  }
+
   void _showPlaybackProxyModeSheet(
     BuildContext context, {
     bool fullscreenDrawer = false,
@@ -1543,6 +1659,15 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                     state.context,
                     fullscreenDrawer: true,
                   );
+                },
+              ),
+              _buildFullscreenSettingRow(
+                icon: Icons.memory_rounded,
+                title: '解码方式',
+                subtitle: controller.decodeModeLabel,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showDecodeModeSheet(state.context, fullscreenDrawer: true);
                 },
               ),
               if (controller.canSwitchAudioTrack)
@@ -2250,6 +2375,12 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                                     onTap: () =>
                                         _showSubtitleTrackSheet(context),
                                   ),
+                                _buildInfoPill(
+                                  icon: Icons.memory_rounded,
+                                  label: '解码',
+                                  value: controller.decodeModeLabel,
+                                  onTap: () => _showDecodeModeSheet(context),
+                                ),
                                 _buildInfoPill(
                                   icon: Icons.speed_rounded,
                                   label: '倍速',
