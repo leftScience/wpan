@@ -366,7 +366,6 @@ func (c *quarkTVClient) getStreamingLink(ctx context.Context, fid string) (quark
 		"group_by":   "source",
 		"fid":        strings.TrimSpace(fid),
 		"resolution": "low,normal,high,super,2k,4k",
-		"support":    "dolby_vision",
 	}, nil, &resp, true); err != nil {
 		return quarkFileLink{}, fmt.Errorf("夸克TV转码链接获取失败: %w", err)
 	}
