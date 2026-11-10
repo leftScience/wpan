@@ -63,12 +63,7 @@ class PlayerController extends GetxController {
     if (defaultTargetPlatform != TargetPlatform.android) {
       return const VideoControllerConfiguration();
     }
-    // Android 默认 vo=gpu 会单独创建 EGL 上下文，部分设备的 GL 属性不被接受，
-    // 表现为只有声音没有画面。改用 MediaCodec 直接把画面渲染到 Surface。
-    return const VideoControllerConfiguration(
-      vo: 'mediacodec_embed',
-      hwdec: 'mediacodec',
-    );
+    return const VideoControllerConfiguration(vo: 'gpu');
   }
 
   final currentIndex = 0.obs;
@@ -131,6 +126,13 @@ class PlayerController extends GetxController {
   StreamSubscription<String>? _errorSubscription;
   bool _proxyModeFallbackApplied = false;
   bool _decodeFallbackApplied = false;
+
+  bool _voConfigured = false;
+  bool _voConfiguredKnown = false;
+  bool _voFallbackApplied = false;
+  bool _voFallbackHealthy = false;
+  bool _voFallbackApplying = false;
+  Timer? _voFallbackTimer;
   String? _last302TargetUrl;
   String? _last302ErrorMessage;
 
@@ -383,6 +385,7 @@ class PlayerController extends GetxController {
     super.onReady();
     unawaited(_applyMpvColorPipeline());
     unawaited(_ensureDecodeModeApplied());
+    unawaited(_observeVideoOutputState());
     _playingSubscription = player.stream.playing.listen(_handlePlayingChanged);
     _completedSubscription = player.stream.completed.listen(
       _handleCompletedChanged,
@@ -503,8 +506,10 @@ class PlayerController extends GetxController {
     if (playing) {
       _proxyModeFallbackApplied = false;
       unawaited(_applyPreferredPlaybackRate());
+      _scheduleVoFallbackCheck();
       return;
     }
+    _voFallbackTimer?.cancel();
     // Persist on pause as well as on stop/background so a normal pause always
     // leaves a resume point.
     unawaited(_persistPlaybackSnapshot());
@@ -512,6 +517,13 @@ class PlayerController extends GetxController {
 
   void _handlePlaybackStreamError(String error) {
     if (_isNonFatalPlayerMessage(error)) return;
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        _looksLikeVideoOutputError(error)) {
+      if (!_voFallbackApplied) {
+        unawaited(_applyMediaCodecEmbedFallback());
+      }
+      return;
+    }
     if (_looksLikeDecodeError(error) &&
         !_decodeFallbackApplied &&
         effectiveDecodeMode != 'sw') {
@@ -638,6 +650,102 @@ class PlayerController extends GetxController {
         lower.contains('decoder initialization') ||
         lower.contains('no video decoder') ||
         lower.contains('decoder init');
+  }
+
+  bool _looksLikeVideoOutputError(String error) {
+    final lower = error.toLowerCase();
+    return lower.contains('egl') ||
+        lower.contains('opengl') ||
+        lower.contains('gpu-context') ||
+        lower.contains('vo/gpu') ||
+        lower.contains('vo=gpu') ||
+        lower.contains('libplacebo') ||
+        lower.contains('video output') ||
+        lower.contains('could not create texture') ||
+        lower.contains('failed to create video');
+  }
+
+  /// 监听 mpv 的 vo-configured：vo=gpu 的 EGL 初始化失败时它会保持 no。
+  Future<void> _observeVideoOutputState() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.observeProperty('vo-configured', (value) async {
+        final normalized = value.trim().toLowerCase();
+        final configured =
+            normalized == 'yes' || normalized == 'true' || normalized == '1';
+        _voConfigured = configured;
+        _voConfiguredKnown = true;
+        if (configured) {
+          _voFallbackTimer?.cancel();
+          if (_voFallbackApplied) {
+            _voFallbackHealthy = true;
+          }
+          return;
+        }
+        _scheduleVoFallbackCheck();
+      });
+    } catch (_) {}
+  }
+
+  void _scheduleVoFallbackCheck() {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (_voFallbackApplying) return;
+    _voFallbackTimer?.cancel();
+    _voFallbackTimer = Timer(
+      const Duration(seconds: 4),
+      () => unawaited(_maybeApplyMediaCodecEmbedFallback()),
+    );
+  }
+
+  Future<void> _maybeApplyMediaCodecEmbedFallback() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (_voFallbackApplying || _voConfigured) return;
+    if (!_voConfiguredKnown) return;
+    // mediacodec_embed 也失败时不要反复重试。
+    if (_voFallbackApplied && !_voFallbackHealthy) return;
+    if (!player.state.playing) return;
+    // 还没拿到视频参数时可能只是尚未起播，避免把音频文件误判为黑屏。
+    final width = player.state.width ?? 0;
+    final height = player.state.height ?? 0;
+    if (width <= 0 || height <= 0) return;
+    if (player.state.position < const Duration(seconds: 1)) return;
+    await _applyMediaCodecEmbedFallback();
+  }
+
+  /// vo=gpu 无法创建 EGL 上下文时的兜底：让 MediaCodec 直接把画面渲染到 Surface。
+  /// 切换后继续监听 vo-configured，若 surface 重建导致 vo 被重置为 gpu，会再次回退。
+  Future<void> _applyMediaCodecEmbedFallback() async {
+    if (_voFallbackApplying) return;
+    _voFallbackApplying = true;
+    _voFallbackHealthy = false;
+    final platform = player.platform;
+    if (platform is! NativePlayer) {
+      _voFallbackApplying = false;
+      return;
+    }
+    final position = player.state.position;
+    try {
+      await platform.setProperty('vo', 'null');
+      await platform.setProperty('hwdec', 'mediacodec');
+      await platform.setProperty('vo', 'mediacodec_embed');
+      // mediacodec_embed 需要重新初始化 vid，否则会报 Could not open codec。
+      await platform.setProperty('vid', 'auto');
+      if (position > Duration.zero) {
+        await player.seek(position);
+      }
+    } catch (_) {
+    } finally {
+      _voFallbackApplying = false;
+    }
+    if (_voFallbackApplied) return;
+    _voFallbackApplied = true;
+    Get.snackbar(
+      '播放器兼容模式',
+      '当前设备无法使用 GPU 渲染，已切换到 MediaCodec 输出',
+      duration: const Duration(seconds: 5),
+    );
   }
 
   Future<void> _applyMpvColorPipeline() async {
@@ -2346,6 +2454,7 @@ class PlayerController extends GetxController {
     _tracksSubscription?.cancel();
     _scrubTimer?.cancel();
     _castProgressTimer?.cancel();
+    _voFallbackTimer?.cancel();
     unawaited(_audioSession.dispose());
     player.dispose();
     unawaited(WakelockPlus.disable());
