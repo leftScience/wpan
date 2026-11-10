@@ -1008,14 +1008,16 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     _syncAudioPlaybackState();
   }
 
-  Future<void> pause() async {
+  Future<void> pause({bool releaseAudioSession = true}) async {
     try {
       if (tracks.isNotEmpty) {
         await _player.pause();
         _syncAudioPlaybackState();
       }
     } finally {
-      await _audioSession.deactivate();
+      if (releaseAudioSession) {
+        await _audioSession.deactivate();
+      }
     }
   }
 

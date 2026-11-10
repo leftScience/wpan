@@ -12,6 +12,7 @@ import '../../../data/api/config.dart';
 import '../../../data/api/quark.dart';
 import '../../../data/models/quark_file_entry.dart';
 import '../../../services/auth_service.dart';
+import '../../../services/playback_audio_session.dart';
 import '../../../services/playback_entry_service.dart';
 import '../../../services/video_cast_service.dart';
 import '../../../utils/app_env.dart';
@@ -45,6 +46,17 @@ class PlayerController extends GetxController {
   late final VideoController videoController = VideoController(
     player,
     configuration: _videoControllerConfiguration,
+  );
+
+  /// 视频播放器需要自己持有音频会话：音乐播放器暂停时会 setActive(false)，
+  /// 之后 mpv 再打开音频单元就会失败（Could not open/initialize audio device）。
+  late final PlaybackAudioSession _audioSession = PlaybackAudioSession(
+    onPauseRequested: () async {
+      try {
+        await player.pause();
+      } catch (_) {}
+    },
+    isPlaying: () => player.state.playing,
   );
 
   static VideoControllerConfiguration get _videoControllerConfiguration {
@@ -100,6 +112,7 @@ class PlayerController extends GetxController {
   final PlayerPreferencesStorage _playerPreferencesStorage =
       PlayerPreferencesStorage();
   String? _preferredPlaybackProxyMode;
+
   /// 解码模式：auto / hw / sw。必须是 Rx，设置面板的 Obx 依赖它。
   final RxString decodeMode = 'auto'.obs;
   double? _preferredPlaybackRate;
@@ -129,6 +142,7 @@ class PlayerController extends GetxController {
     final short = target.length > 80 ? target.substring(0, 80) : target;
     return '直链：$short';
   }
+
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
   StreamSubscription<double>? _rateSubscription;
@@ -423,6 +437,13 @@ class PlayerController extends GetxController {
     _playerConfigured = true;
   }
 
+  /// 打开视频前显式激活音频会话，避免被音乐播放器的 deactivate 影响。
+  Future<void> _ensureVideoAudioSession() async {
+    try {
+      await _audioSession.activate(PlaybackAudioProfile.media);
+    } catch (_) {}
+  }
+
   void handleRouteArguments(dynamic args) {
     unawaited(_handleRouteArgumentsInternal(args));
   }
@@ -490,6 +511,7 @@ class PlayerController extends GetxController {
   }
 
   void _handlePlaybackStreamError(String error) {
+    if (_isNonFatalPlayerMessage(error)) return;
     if (_looksLikeDecodeError(error) &&
         !_decodeFallbackApplied &&
         effectiveDecodeMode != 'sw') {
@@ -587,6 +609,23 @@ class PlayerController extends GetxController {
     }
   }
 
+  bool _isNonFatalPlayerMessage(String error) {
+    final lower = error.toLowerCase();
+    const patterns = <String>[
+      'audio device',
+      'audio output',
+      'audio unit',
+      'could not open/initialize audio',
+      'failed to initialize audio',
+      'no sound',
+      'libcuda',
+      'libva',
+      'vaapi',
+      'vdpau',
+    ];
+    return patterns.any(lower.contains);
+  }
+
   bool _looksLikeDecodeError(String error) {
     final lower = error.toLowerCase();
     return lower.contains('videotoolbox') ||
@@ -619,6 +658,7 @@ class PlayerController extends GetxController {
     _resetAudioTrackState();
     _resetSubtitleTrackState();
     unawaited(WakelockPlus.disable());
+    await _audioSession.deactivate();
   }
 
   Future<void> pauseForBackground() async {
@@ -1157,8 +1197,9 @@ class PlayerController extends GetxController {
     await _ensureSkipSettingsLoaded();
 
     if (Get.isRegistered<MusicPlayerController>()) {
-      unawaited(Get.find<MusicPlayerController>().pause());
+      await Get.find<MusicPlayerController>().pause(releaseAudioSession: false);
     }
+    await _ensureVideoAudioSession();
 
     final episode = episodes[index];
     final episodePath = episode.path?.trim();
@@ -2305,6 +2346,7 @@ class PlayerController extends GetxController {
     _tracksSubscription?.cancel();
     _scrubTimer?.cancel();
     _castProgressTimer?.cancel();
+    unawaited(_audioSession.dispose());
     player.dispose();
     unawaited(WakelockPlus.disable());
     super.onClose();
