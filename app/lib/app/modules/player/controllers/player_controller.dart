@@ -126,6 +126,7 @@ class PlayerController extends GetxController {
   StreamSubscription<String>? _errorSubscription;
   bool _proxyModeFallbackApplied = false;
   bool _decodeFallbackApplied = false;
+  String? _appliedHwdec;
 
   bool _voConfigured = false;
   bool _voConfiguredKnown = false;
@@ -601,13 +602,39 @@ class PlayerController extends GetxController {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
     final value = switch (effectiveDecodeMode) {
-      'hw' => 'videotoolbox',
+      // 硬解后端必须按平台选择：videotoolbox 只在 Apple 平台存在，
+      // Android 对应 MediaCodec，Windows 是 D3D11VA，Linux 是 VAAPI。
+      'hw' => _platformHwdec,
       'sw' => 'no',
-      _ => 'auto-safe',
+      // vo 已回退到 mediacodec_embed 时，自动模式也必须保持 mediacodec，
+      // 否则 auto-safe 可能选到别的解码器导致画面出不来。
+      _ =>
+        _voFallbackApplied && defaultTargetPlatform == TargetPlatform.android
+            ? 'mediacodec'
+            : 'auto-safe',
     };
+    // 避免 onReady 的默认 auto 再次覆盖 VideoController 初始化时设置的值。
+    if (_appliedHwdec == value) return;
     try {
       await platform.setProperty('hwdec', value);
+      _appliedHwdec = value;
     } catch (_) {}
+  }
+
+  String get _platformHwdec {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'mediacodec';
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return 'videotoolbox';
+      case TargetPlatform.windows:
+        return 'd3d11va';
+      case TargetPlatform.linux:
+        return 'vaapi';
+      default:
+        return 'auto-safe';
+    }
   }
 
   String _normalizeDecodeMode(String? mode) {
@@ -729,6 +756,7 @@ class PlayerController extends GetxController {
     try {
       await platform.setProperty('vo', 'null');
       await platform.setProperty('hwdec', 'mediacodec');
+      _appliedHwdec = 'mediacodec';
       await platform.setProperty('vo', 'mediacodec_embed');
       // mediacodec_embed 需要重新初始化 vid，否则会报 Could not open codec。
       await platform.setProperty('vid', 'auto');
