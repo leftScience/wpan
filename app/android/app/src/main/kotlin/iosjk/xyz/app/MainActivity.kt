@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.TrafficStats
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -39,7 +38,6 @@ class MainActivity : AudioServiceActivity() {
                         releaseMulticastLock()
                         result.success(null)
                     }
-                    "getNetworkBytes" -> result.success(getNetworkBytes())
                     "openExternalUrl" -> {
                         val rawUrl = call.argument<String>("url")?.trim().orEmpty()
                         result.success(openExternalUrl(rawUrl))
@@ -104,15 +102,6 @@ class MainActivity : AudioServiceActivity() {
             "address" to linkAddress.address.hostAddress,
             "prefixLength" to linkAddress.prefixLength,
         )
-    }
-
-    private fun getNetworkBytes(): Map<String, Long>? {
-        val rx = TrafficStats.getTotalRxBytes()
-        val tx = TrafficStats.getTotalTxBytes()
-        if (rx == TrafficStats.UNSUPPORTED.toLong() || tx == TrafficStats.UNSUPPORTED.toLong()) {
-            return null
-        }
-        return mapOf("rx" to rx, "tx" to tx)
     }
 
     private fun openExternalUrl(rawUrl: String): Boolean {

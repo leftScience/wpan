@@ -13,7 +13,6 @@ import '../../../theme/app_theme.dart';
 import '../../../widgets/media_player_header_title.dart';
 import '../../../widgets/playlist_loading_view.dart';
 import '../../../services/android_pip_service.dart';
-import '../../../services/network_speed_service.dart';
 import '../controllers/player_controller.dart';
 
 class PlayerView extends StatefulWidget {
@@ -63,7 +62,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     );
     unawaited(_loadFullscreenGestureMediaState());
     controller.handleRouteArguments(Get.arguments);
-    Get.find<NetworkSpeedService>().start();
     _pipAspectRatioWorker = ever<double>(controller.videoAspectRatio, (_) {
       if (!controller.isFullscreen.value) return;
       unawaited(_syncPictureInPictureAvailability());
@@ -92,7 +90,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     unawaited(controller.setControlsLocked(false));
     unawaited(_resetGestureBrightness());
     unawaited(controller.stopPlayback());
-    Get.find<NetworkSpeedService>().stop();
     unawaited(SystemChrome.setPreferredOrientations([]));
     WidgetsBinding.instance.removeObserver(this);
     _episodeScrollController.dispose();
@@ -236,6 +233,103 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     return text;
   }
 
+  Widget _buildFullscreenToggleButton() {
+    return Builder(
+      builder: (context) {
+        final fullscreen = isFullscreen(context);
+        return IconButton(
+          onPressed: () => unawaited(_togglePlayerFullscreen(context)),
+          icon: Icon(
+            fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+          ),
+          iconSize: 28,
+          color: Colors.white,
+        );
+      },
+    );
+  }
+
+  Future<void> _togglePlayerFullscreen(BuildContext context) async {
+    if (isFullscreen(context)) {
+      await exitFullscreen(context);
+      return;
+    }
+    if (!context.mounted) return;
+    final inherited = VideoStateInheritedWidget.of(context);
+    final stateValue = inherited.state;
+    final contextNotifierValue = inherited.contextNotifier;
+    final videoViewParametersNotifierValue =
+        inherited.videoViewParametersNotifier;
+    final controllerValue = stateValue.widget.controller;
+    unawaited(
+      Navigator.of(context, rootNavigator: true).push(
+        PageRouteBuilder(
+          pageBuilder: (_, _, _) => Material(
+            color: Colors.black,
+            child: VideoStateInheritedWidget(
+              state: stateValue,
+              contextNotifier: contextNotifierValue,
+              videoViewParametersNotifier: videoViewParametersNotifierValue,
+              disposeNotifiers: false,
+              child: FullscreenInheritedWidget(
+                parent: stateValue,
+                child: VideoStateInheritedWidget(
+                  state: stateValue,
+                  contextNotifier: contextNotifierValue,
+                  videoViewParametersNotifier: videoViewParametersNotifierValue,
+                  disposeNotifiers: false,
+                  child: Obx(() {
+                    final filter = controller.useFlutterDolbyVisionFilter.value
+                        ? controller.createDolbyVisionImageFilter()
+                        : null;
+                    final params = videoViewParametersNotifierValue.value;
+                    final fullscreenFit = controller.isFullscreenCover
+                        ? BoxFit.cover
+                        : BoxFit.contain;
+                    final fullscreenVideo = Video(
+                      controller: controllerValue,
+                      width: null,
+                      height: null,
+                      fit: fullscreenFit,
+                      fill: params.fill,
+                      alignment: params.alignment,
+                      aspectRatio: params.aspectRatio,
+                      filterQuality: params.filterQuality,
+                      controls: params.controls,
+                      wakelock: false,
+                      pauseUponEnteringBackgroundMode:
+                          stateValue.widget.pauseUponEnteringBackgroundMode,
+                      resumeUponEnteringForegroundMode:
+                          stateValue.widget.resumeUponEnteringForegroundMode,
+                      subtitleViewConfiguration:
+                          params.subtitleViewConfiguration,
+                      focusNode: params.focusNode,
+                      onEnterFullscreen: stateValue.widget.onEnterFullscreen,
+                      onExitFullscreen: stateValue.widget.onExitFullscreen,
+                    );
+                    return ImageFiltered(
+                      enabled: filter != null,
+                      imageFilter:
+                          filter ??
+                          const ColorFilter.mode(
+                            Colors.transparent,
+                            BlendMode.dst,
+                          ),
+                      child: fullscreenVideo,
+                    );
+                  }),
+                ),
+              ),
+            ),
+          ),
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+        ),
+      ),
+    );
+    await stateValue.widget.onEnterFullscreen.call();
+  }
+
   Widget _buildFullscreenBackButton(VideoState state) {
     return Obx(() {
       final title = _fullscreenBackTitle();
@@ -306,8 +400,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
 
   List<Widget> _buildFullscreenTopButtonBar(VideoState state) {
     final items = <Widget>[_buildFullscreenBackButton(state), const Spacer()];
-    items.add(_buildNetworkSpeedBadge(compact: true));
-    items.add(SizedBox(width: 8.w));
     items.add(_buildFullscreenEpisodeActions(state.context));
     items.add(SizedBox(width: 8.w));
     items.add(
@@ -454,36 +546,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   double _compactEpisodePanelWidth(MediaQueryData mediaQuery) {
     final screenWidth = mediaQuery.size.width;
     return math.min(420.0, math.max(280.0, screenWidth * 0.4));
-  }
-
-  Widget _buildNetworkSpeedBadge({bool compact = false}) {
-    if (!Get.isRegistered<NetworkSpeedService>()) {
-      return const SizedBox.shrink();
-    }
-    final service = Get.find<NetworkSpeedService>();
-    return Obx(() {
-      final rate = service.downloadBytesPerSecond.value;
-      if (rate <= 0) return const SizedBox.shrink();
-      return IgnorePointer(
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 6.w : 8.w,
-            vertical: compact ? 2.h : 4.h,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.45),
-            borderRadius: BorderRadius.circular(10.r),
-          ),
-          child: Text(
-            '↓ ${NetworkSpeedService.formatRate(rate)}',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: compact ? 10.sp : 11.sp,
-            ),
-          ),
-        ),
-      );
-    });
   }
 
   Widget _buildInfoPill({
@@ -2211,7 +2273,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                                             SizedBox(width: 6.w),
                                             const MaterialPositionIndicator(),
                                             const Spacer(),
-                                            const MaterialFullscreenButton(),
+                                            _buildFullscreenToggleButton(),
                                           ],
                                         );
 
@@ -2258,7 +2320,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                                             ),
                                           ],
                                           SizedBox(width: 6.w),
-                                          const MaterialFullscreenButton(),
+                                          _buildFullscreenToggleButton(),
                                         ],
                                         bottomButtonBarMargin: EdgeInsets.only(
                                           left: 16.w,
@@ -2322,15 +2384,17 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                         ]);
                       },
                     );
-                    if (!controller.useFlutterDolbyVisionFilter.value) {
-                      return videoWidget;
-                    }
-                    final filter = controller.createDolbyVisionImageFilter();
-                    if (filter == null) {
-                      return videoWidget;
-                    }
+                    final filter = controller.useFlutterDolbyVisionFilter.value
+                        ? controller.createDolbyVisionImageFilter()
+                        : null;
                     return ImageFiltered(
-                      imageFilter: filter,
+                      enabled: filter != null,
+                      imageFilter:
+                          filter ??
+                          const ColorFilter.mode(
+                            Colors.transparent,
+                            BlendMode.dst,
+                          ),
                       child: videoWidget,
                     );
                   }),

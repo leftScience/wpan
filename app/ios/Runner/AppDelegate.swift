@@ -29,12 +29,6 @@ final class NetworkInfoPlugin {
       // iOS has no Android-style multicast lock; sockets keep receiving while
       // the app is in the foreground.
       result(nil)
-    case "getNetworkBytes":
-      if let bytes = Self.networkBytes() {
-        result(["rx": bytes.rx, "tx": bytes.tx])
-      } else {
-        result(nil)
-      }
     case "openExternalUrl":
       guard let args = call.arguments as? [String: Any],
             let rawUrl = args["url"] as? String,
@@ -54,34 +48,6 @@ final class NetworkInfoPlugin {
     default:
       result(FlutterMethodNotImplemented)
     }
-  }
-
-  /// Cumulative byte counters for all non-loopback interfaces. Flutter samples
-  /// this once per second to show the current download rate.
-  private static func networkBytes() -> (rx: UInt64, tx: UInt64)? {
-    var interfaces: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&interfaces) == 0, let first = interfaces else {
-      return nil
-    }
-    defer { freeifaddrs(interfaces) }
-
-    var rx: UInt64 = 0
-    var tx: UInt64 = 0
-    var cursor = first
-    while true {
-      let entry = cursor.pointee
-      let flags = Int32(entry.ifa_flags)
-      let isUp = (flags & IFF_UP) != 0
-      let isLoopback = (flags & IFF_LOOPBACK) != 0
-      if isUp, !isLoopback, let data = entry.ifa_data {
-        let network = data.assumingMemoryBound(to: if_data.self)
-        rx &+= UInt64(network.pointee.ifi_ibytes)
-        tx &+= UInt64(network.pointee.ifi_obytes)
-      }
-      guard let next = entry.ifa_next else { break }
-      cursor = next
-    }
-    return (rx, tx)
   }
 
   private struct Ipv4Cidr {

@@ -20,7 +20,6 @@ import 'package:ohome/app/services/android_pip_service.dart';
 import 'package:ohome/app/services/auth_service.dart';
 import 'package:ohome/app/services/history_playback_service.dart';
 import 'package:ohome/app/services/media_history_service.dart';
-import 'package:ohome/app/services/network_speed_service.dart';
 import 'package:ohome/app/services/playback_entry_service.dart';
 import 'package:ohome/app/services/video_cast_service.dart';
 import 'package:ohome/app/utils/http_client.dart';
@@ -89,7 +88,6 @@ class IndexServices {
     );
     Get.put<VideoCastService>(VideoCastService(), permanent: true);
     Get.put<PlaybackEntryService>(PlaybackEntryService(), permanent: true);
-    Get.put<NetworkSpeedService>(NetworkSpeedService().init(), permanent: true);
     Get.put<HistoryPlaybackService>(HistoryPlaybackService(), permanent: true);
     Get.put<AppUpdateService>(
       AppUpdateService(appUpdateApi: Get.find<AppUpdateApi>()),
