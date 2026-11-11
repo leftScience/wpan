@@ -279,7 +279,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                   videoViewParametersNotifier: videoViewParametersNotifierValue,
                   disposeNotifiers: false,
                   child: Obx(() {
-                    final filter = controller.useFlutterDolbyVisionFilter.value
+                    final filter =
+                        controller.useFlutterDolbyVisionFilter.value &&
+                            controller.flutterHdrShaderMode.value > 0
                         ? controller.createDolbyVisionImageFilter()
                         : null;
                     final params = videoViewParametersNotifierValue.value;
@@ -2384,7 +2386,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                         ]);
                       },
                     );
-                    final filter = controller.useFlutterDolbyVisionFilter.value
+                    final filter =
+                        controller.useFlutterDolbyVisionFilter.value &&
+                            controller.flutterHdrShaderMode.value > 0
                         ? controller.createDolbyVisionImageFilter()
                         : null;
                     return ImageFiltered(

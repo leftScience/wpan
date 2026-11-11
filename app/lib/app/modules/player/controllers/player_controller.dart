@@ -137,12 +137,20 @@ class PlayerController extends GetxController {
   bool _voFallbackApplying = false;
   Timer? _voFallbackTimer;
 
-  /// 当前片源是 Dolby Vision Profile 5（或被云转码错转的 DV P5 流）时启用 GLSL 色彩校正着色器。
-  bool _dolbyVisionModeActive = false;
+  /// 当前片源是 Dolby Vision Profile 5 或标准 HDR（PQ / HLG）时启用 GLSL 色彩校正着色器。
+  static const int _hdrShaderModeOff = 0;
+  static const int _hdrShaderModeDoviP5 = 1;
+  static const int _hdrShaderModePq = 2;
+  static const int _hdrShaderModeHlg = 3;
+
+  int _activeHdrShaderMode = _hdrShaderModeOff;
+  bool get _dolbyVisionModeActive => _activeHdrShaderMode != _hdrShaderModeOff;
   bool _dolbyVisionModeSwitching = false;
   bool _dolbyVisionProfile5Confirmed = false;
   final RxBool useFlutterDolbyVisionFilter = false.obs;
+  final RxInt flutterHdrShaderMode = _hdrShaderModeOff.obs;
   ui.FragmentProgram? _doviFragmentProgram;
+  String? _activeGlslShaderFilePath;
   String? _last302TargetUrl;
   String? _last302ErrorMessage;
 
@@ -722,9 +730,12 @@ class PlayerController extends GetxController {
             _voFallbackHealthy = true;
           } else if (_dolbyVisionModeActive &&
               !useFlutterDolbyVisionFilter.value &&
-              _doviShaderFilePath != null) {
+              _activeGlslShaderFilePath != null) {
             try {
-              await platform.setProperty('glsl-shaders', _doviShaderFilePath!);
+              await platform.setProperty(
+                'glsl-shaders',
+                _activeGlslShaderFilePath!,
+              );
             } catch (_) {}
           }
           return;
@@ -771,12 +782,12 @@ class PlayerController extends GetxController {
       return;
     }
     final position = player.state.position;
-    final wasDolbyVision = _dolbyVisionModeActive;
+    final previousHdrMode = _activeHdrShaderMode;
     try {
       await platform.setProperty('vo', 'null');
       await platform.setProperty('hwdec', 'mediacodec');
       _appliedHwdec = 'mediacodec';
-      _dolbyVisionModeActive = false;
+      _activeHdrShaderMode = _hdrShaderModeOff;
       await platform.setProperty('vo', 'mediacodec_embed');
       // mediacodec_embed 需要重新初始化 vid，否则会报 Could not open codec。
       await platform.setProperty('vid', 'auto');
@@ -789,8 +800,8 @@ class PlayerController extends GetxController {
     }
     if (_voFallbackApplied) return;
     _voFallbackApplied = true;
-    if (wasDolbyVision) {
-      unawaited(_enterDolbyVisionMode());
+    if (previousHdrMode != _hdrShaderModeOff) {
+      unawaited(_enterHdrShaderMode(previousHdrMode));
     }
     Get.snackbar(
       '播放器兼容模式',
@@ -802,8 +813,9 @@ class PlayerController extends GetxController {
   /// Dolby Vision Profile 5（bl_signal_compatibility_id=0）的基础层是杜比私有 IPTPQc2，
   /// media_kit 内置的 mpv 0.36 编译时未开启 libplacebo（无 gpu-next），会把画面按普通
   /// BT.709 矩阵解码，导致无论本地代理还是 302 云转码流都出现明显的偏绿/偏紫。
-  /// 这里通过 vo=gpu 的自定义 GLSL 着色器在像素阶段把错误映射的 RGB 反算回 IPTPQc2，
-  /// 再经 PQ EOTF + LMS->BT.709 + Hable 色调映射还原正确色彩，Android 与 iOS 通用且保持硬解。
+  /// 同时针对标准 HDR10 / CUVA HDR Vivid (PQ) 与 HLG 片源，iOS 模拟器的软解输出管线
+  /// (MPV_RENDER_API_TYPE_SW) 不经过 vo_gpu 色调映射，真机与 Android 在云转码剥离动态
+  /// 元数据后也会因逐通道压缩导致红色偏暗偏棕。这里统一通过保色相 maxRGB 色调映射着色器还原。
   Future<void> _observeDolbyVisionProfile() async {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
@@ -819,14 +831,12 @@ class PlayerController extends GetxController {
     final profile = int.tryParse(value.trim());
     if (profile == 5) {
       _dolbyVisionProfile5Confirmed = true;
-      await _enterDolbyVisionMode();
+      await _enterHdrShaderMode(_hdrShaderModeDoviP5);
       return;
     }
     if (profile != null && profile != 5) {
       _dolbyVisionProfile5Confirmed = false;
-      if (_dolbyVisionModeActive && !_dolbyVisionModeSwitching) {
-        await _restoreDefaultVideoPipeline();
-      }
+      await _evaluateDolbyVisionShader(player.state.videoParams);
     }
   }
 
@@ -844,6 +854,22 @@ vec3 pq_eotf(vec3 n) {
 
 vec3 hable_Curve(vec3 x) {
     return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
+}
+
+vec3 tone_map_and_finish(vec3 rgb) {
+    rgb = max(rgb, 0.0);
+    float peak = max(rgb.r, max(rgb.g, rgb.b));
+    if (peak > 1e-6) {
+        float mapped_peak = hable_Curve(vec3(peak * 2.2)).x / hable_Curve(vec3(6.0)).x;
+        mapped_peak = clamp(mapped_peak, 0.0, 1.0);
+        rgb *= (mapped_peak / peak);
+    }
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    float hi = clamp((peak - 1.2) / 3.0, 0.0, 1.0) * 0.35;
+    rgb = mix(rgb, vec3(luma), hi);
+    luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
+    return pow(rgb, vec3(1.0 / 2.2));
 }
 
 vec4 hook() {
@@ -887,29 +913,135 @@ vec4 hook() {
         -1.105170 * lms.x + 2.311198 * lms.y - 0.205880 * lms.z,
          0.028104 * lms.x - 0.194660 * lms.y + 1.166325 * lms.z
     );
-    rgb = max(rgb, 0.0);
-
-    // 换算到 203 nits SDR 基准并做 Hable 色调映射：
     rgb *= (10000.0 / 203.0);
-    rgb = hable_Curve(rgb * 2.2) / hable_Curve(vec3(10.0));
-    rgb = clamp(rgb, 0.0, 1.0);
 
-    // 转为 BT.1886 / Gamma 2.2 输出（匹配 mpv dumb mode 直接输出）：
-    color.rgb = pow(rgb, vec3(1.0 / 2.2));
+    color.rgb = tone_map_and_finish(rgb);
     return color;
 }
 ''';
 
-  String? _doviShaderFilePath;
+  static const String _hdrPqGlslShader = r'''//!HOOK MAIN
+//!BIND HOOKED
+//!DESC HDR10 / HDR Vivid PQ (BT.2020 PQ -> BT.709 SDR)
 
-  Future<String?> _ensureDoviShaderFile() async {
-    if (_doviShaderFilePath != null) return _doviShaderFilePath;
+vec3 pq_eotf(vec3 n) {
+    n = clamp(n, 0.0, 1.0);
+    vec3 np = pow(n, vec3(1.0 / 78.84375));
+    vec3 num = max(np - 0.8359375, 0.0);
+    vec3 den = 18.8515625 - 18.6875 * np;
+    return pow(num / max(den, 1e-6), vec3(1.0 / 0.1593017578125));
+}
+
+vec3 bt2020_to_bt709(vec3 c) {
+    return vec3(
+         1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
+        -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
+        -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b
+    );
+}
+
+vec3 hable_Curve(vec3 x) {
+    return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
+}
+
+vec3 tone_map_and_finish(vec3 rgb) {
+    rgb = max(rgb, 0.0);
+    float peak = max(rgb.r, max(rgb.g, rgb.b));
+    if (peak > 1e-6) {
+        float mapped_peak = hable_Curve(vec3(peak * 2.2)).x / hable_Curve(vec3(6.0)).x;
+        mapped_peak = clamp(mapped_peak, 0.0, 1.0);
+        rgb *= (mapped_peak / peak);
+    }
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    float hi = clamp((peak - 1.2) / 3.0, 0.0, 1.0) * 0.35;
+    rgb = mix(rgb, vec3(luma), hi);
+    luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
+    return pow(rgb, vec3(1.0 / 2.2));
+}
+
+vec4 hook() {
+    vec4 color = HOOKED_tex(HOOKED_pos);
+    vec3 linear2020 = pq_eotf(color.rgb);
+    vec3 rgb = bt2020_to_bt709(linear2020) * (10000.0 / 100.0);
+    color.rgb = tone_map_and_finish(rgb);
+    return color;
+}
+''';
+
+  static const String _hdrHlgGlslShader = r'''//!HOOK MAIN
+//!BIND HOOKED
+//!DESC HDR HLG (BT.2020 HLG -> BT.709 SDR)
+
+vec3 hlg_inverse_oetf(vec3 e) {
+    e = clamp(e, 0.0, 1.0);
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    vec3 low = (e * e) / 3.0;
+    vec3 high = (exp((e - c) / a) + b) / 12.0;
+    return mix(low, high, step(vec3(0.5), e));
+}
+
+vec3 hlg_eotf(vec3 e) {
+    vec3 scene = hlg_inverse_oetf(e);
+    float ys = max(dot(scene, vec3(0.2627, 0.6780, 0.0593)), 1e-6);
+    return scene * pow(ys, 0.2);
+}
+
+vec3 bt2020_to_bt709(vec3 c) {
+    return vec3(
+         1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
+        -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
+        -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b
+    );
+}
+
+vec3 hable_Curve(vec3 x) {
+    return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
+}
+
+vec3 tone_map_and_finish(vec3 rgb) {
+    rgb = max(rgb, 0.0);
+    float peak = max(rgb.r, max(rgb.g, rgb.b));
+    if (peak > 1e-6) {
+        float mapped_peak = hable_Curve(vec3(peak * 2.2)).x / hable_Curve(vec3(6.0)).x;
+        mapped_peak = clamp(mapped_peak, 0.0, 1.0);
+        rgb *= (mapped_peak / peak);
+    }
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    float hi = clamp((peak - 1.2) / 3.0, 0.0, 1.0) * 0.35;
+    rgb = mix(rgb, vec3(luma), hi);
+    luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
+    return pow(rgb, vec3(1.0 / 2.2));
+}
+
+vec4 hook() {
+    vec4 color = HOOKED_tex(HOOKED_pos);
+    vec3 linear2020 = hlg_eotf(color.rgb);
+    vec3 rgb = bt2020_to_bt709(linear2020) * 1.8;
+    color.rgb = tone_map_and_finish(rgb);
+    return color;
+}
+''';
+
+  final Map<int, String> _glslShaderFilePaths = <int, String>{};
+
+  Future<String?> _ensureGlslShaderFile(int mode) async {
+    final cached = _glslShaderFilePaths[mode];
+    if (cached != null) return cached;
+    final (filename, source) = switch (mode) {
+      _hdrShaderModeDoviP5 => ('wpan_dovi_p5_tonemap.glsl', _doviP5GlslShader),
+      _hdrShaderModePq => ('wpan_hdr_pq_tonemap.glsl', _hdrPqGlslShader),
+      _hdrShaderModeHlg => ('wpan_hdr_hlg_tonemap.glsl', _hdrHlgGlslShader),
+      _ => ('', ''),
+    };
+    if (filename.isEmpty) return null;
     try {
-      final file = File(
-        '${Directory.systemTemp.path}/wpan_dovi_p5_tonemap.glsl',
-      );
-      await file.writeAsString(_doviP5GlslShader, flush: true);
-      _doviShaderFilePath = file.path;
+      final file = File('${Directory.systemTemp.path}/$filename');
+      await file.writeAsString(source, flush: true);
+      _glslShaderFilePaths[mode] = file.path;
       return file.path;
     } catch (_) {
       return null;
@@ -928,12 +1060,18 @@ vec4 hook() {
     }
   }
 
-  /// 创建用于 Flutter Impeller 渲染管线的杜比视界 Profile 5 像素着色器滤镜（iOS 真机/模拟器及 Android 兼容模式通用）。
+  /// 创建用于 Flutter Impeller 渲染管线的 HDR / 杜比视界像素着色器滤镜（iOS 真机/模拟器及 Android 兼容模式通用）。
   ui.ImageFilter? createDolbyVisionImageFilter() {
+    final mode = flutterHdrShaderMode.value;
+    if (mode <= _hdrShaderModeOff) return null;
     final program = _doviFragmentProgram;
     if (program != null && ui.ImageFilter.isShaderFilterSupported) {
       try {
-        return ui.ImageFilter.shader(program.fragmentShader());
+        final shader = program.fragmentShader();
+        // float slot 0, 1 由 Impeller ImageFilter.shader 自动填入 u_size；
+        // float slot 2 为 u_mode（0.0 = DV P5, 1.0 = HDR PQ, 2.0 = HDR HLG）。
+        shader.setFloat(2, (mode - 1).toDouble());
+        return ui.ImageFilter.shader(shader);
       } catch (_) {}
     }
     return null;
@@ -942,22 +1080,52 @@ vec4 hook() {
   bool get _shouldUseFlutterDolbyVisionFilter =>
       defaultTargetPlatform != TargetPlatform.android || _voFallbackApplied;
 
-  Future<void> _enterDolbyVisionMode() async {
-    if (_dolbyVisionModeActive || _dolbyVisionModeSwitching) return;
+  Future<void> _configureMpvTargetColorspaceForMode(
+    NativePlayer platform,
+    int mode,
+  ) async {
+    try {
+      switch (mode) {
+        case _hdrShaderModePq:
+          await platform.setProperty('target-prim', 'bt.2020');
+          await platform.setProperty('target-trc', 'pq');
+          break;
+        case _hdrShaderModeHlg:
+          await platform.setProperty('target-prim', 'bt.2020');
+          await platform.setProperty('target-trc', 'hlg');
+          break;
+        default:
+          await platform.setProperty('target-prim', 'auto');
+          await platform.setProperty('target-trc', 'auto');
+          break;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _enterHdrShaderMode(int mode) async {
+    if (mode <= _hdrShaderModeOff) {
+      await _restoreDefaultVideoPipeline();
+      return;
+    }
+    if (_activeHdrShaderMode == mode || _dolbyVisionModeSwitching) return;
     final platform = player.platform;
     if (platform is! NativePlayer) return;
     _dolbyVisionModeSwitching = true;
     try {
+      await _configureMpvTargetColorspaceForMode(platform, mode);
       if (_shouldUseFlutterDolbyVisionFilter) {
         final program = await _ensureDoviFragmentProgram();
         if (program == null) return;
-        _dolbyVisionModeActive = true;
+        _activeHdrShaderMode = mode;
+        flutterHdrShaderMode.value = mode;
         useFlutterDolbyVisionFilter.value = true;
         return;
       }
-      final shaderPath = await _ensureDoviShaderFile();
+      final shaderPath = await _ensureGlslShaderFile(mode);
       if (shaderPath == null) return;
-      _dolbyVisionModeActive = true;
+      _activeHdrShaderMode = mode;
+      _activeGlslShaderFilePath = shaderPath;
+      flutterHdrShaderMode.value = _hdrShaderModeOff;
       useFlutterDolbyVisionFilter.value = false;
       await platform.setProperty('glsl-shaders', shaderPath);
     } catch (_) {
@@ -968,14 +1136,22 @@ vec4 hook() {
 
   Future<void> _restoreDefaultVideoPipeline() async {
     _dolbyVisionProfile5Confirmed = false;
-    if (!_dolbyVisionModeActive && !useFlutterDolbyVisionFilter.value) return;
+    if (_activeHdrShaderMode == _hdrShaderModeOff &&
+        !useFlutterDolbyVisionFilter.value &&
+        flutterHdrShaderMode.value == _hdrShaderModeOff) {
+      return;
+    }
     final platform = player.platform;
-    _dolbyVisionModeActive = false;
+    _activeHdrShaderMode = _hdrShaderModeOff;
+    _activeGlslShaderFilePath = null;
+    flutterHdrShaderMode.value = _hdrShaderModeOff;
     useFlutterDolbyVisionFilter.value = false;
     if (platform is! NativePlayer) return;
     _dolbyVisionModeSwitching = true;
     try {
       await platform.setProperty('glsl-shaders', '');
+      await platform.setProperty('target-prim', 'auto');
+      await platform.setProperty('target-trc', 'auto');
     } catch (_) {
     } finally {
       _dolbyVisionModeSwitching = false;
@@ -1010,33 +1186,42 @@ vec4 hook() {
     return false;
   }
 
-  /// MKV 封装或 302 云转码流在 mpv 0.36 下不会上报 dolby-vision-profile，
-  /// 且伽马曲线会被标成普通 bt.1886（而非标准 HDR10/Profile 8 的 pq/hlg）。
-  /// 此时结合片源路径/标题中的杜比视界标识自动挂载或卸载着色器。
+  /// 根据视频流色彩参数自动挂载/切换 HDR 与杜比视界色调映射着色器：
+  /// 1. 杜比视界 Profile 5（或云转码丢失元数据但路径含杜比标识的非标准流）-> Mode 1 (IPTPQc2 -> BT.709)
+  /// 2. 标准 HDR HLG (arib-std-b67 / hlg) -> Mode 3 (BT.2020 HLG -> BT.709)
+  /// 3. 标准 HDR10 / HDR Vivid / DV Profile 8 基础层 (pq / smpte2084 / bt.2020) -> Mode 2 (BT.2020 PQ -> BT.709)
   Future<void> _evaluateDolbyVisionShader(VideoParams params) async {
     final width = params.dw ?? params.w ?? 0;
     final height = params.dh ?? params.h ?? 0;
     if (width <= 0 || height <= 0) return;
 
     final colormatrix = (params.colormatrix ?? '').trim().toLowerCase();
-    if (_dolbyVisionProfile5Confirmed || colormatrix == 'dolbyvision') {
-      await _enterDolbyVisionMode();
+    final gamma = (params.gamma ?? '').trim().toLowerCase();
+    final primaries = (params.primaries ?? '').trim().toLowerCase();
+
+    final isPqHdr = gamma == 'pq' || gamma == 'smpte2084';
+    final isHlgHdr = gamma == 'hlg' || gamma == 'arib-std-b67';
+    final isBt2020 = primaries == 'bt.2020';
+    final isStandardHdr = isPqHdr || isHlgHdr || isBt2020;
+
+    if (_dolbyVisionProfile5Confirmed ||
+        colormatrix == 'dolbyvision' ||
+        (!isStandardHdr && _looksLikeDolbyVisionSource())) {
+      await _enterHdrShaderMode(_hdrShaderModeDoviP5);
       return;
     }
 
-    final gamma = (params.gamma ?? '').trim().toLowerCase();
-    final primaries = (params.primaries ?? '').trim().toLowerCase();
-    // 标准 HDR10 / HLG / DV Profile 8 兼容层带有 pq/hlg 曲线和 bt.2020 原色，
-    // 由 mpv 内置的 tone-mapping 处理即可，不应叠加 IPTPQc2 反算着色器。
-    final isStandardHdr =
-        gamma == 'pq' ||
-        gamma == 'smpte2084' ||
-        gamma == 'arib-std-b67' ||
-        gamma == 'hlg' ||
-        primaries == 'bt.2020';
-    if (!isStandardHdr && _looksLikeDolbyVisionSource()) {
-      await _enterDolbyVisionMode();
-    } else if (_dolbyVisionModeActive) {
+    if (isHlgHdr) {
+      await _enterHdrShaderMode(_hdrShaderModeHlg);
+      return;
+    }
+
+    if (isPqHdr || isBt2020) {
+      await _enterHdrShaderMode(_hdrShaderModePq);
+      return;
+    }
+
+    if (_activeHdrShaderMode != _hdrShaderModeOff) {
       await _restoreDefaultVideoPipeline();
     }
   }
