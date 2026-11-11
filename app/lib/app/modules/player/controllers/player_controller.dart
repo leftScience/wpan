@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -134,6 +135,10 @@ class PlayerController extends GetxController {
   bool _voFallbackHealthy = false;
   bool _voFallbackApplying = false;
   Timer? _voFallbackTimer;
+
+  /// 当前片源是 Dolby Vision Profile 5（或被云转码错转的 DV P5 流）时启用 GLSL 色彩校正着色器。
+  bool _dolbyVisionModeActive = false;
+  bool _dolbyVisionModeSwitching = false;
   String? _last302TargetUrl;
   String? _last302ErrorMessage;
 
@@ -387,6 +392,7 @@ class PlayerController extends GetxController {
     unawaited(_applyMpvColorPipeline());
     unawaited(_ensureDecodeModeApplied());
     unawaited(_observeVideoOutputState());
+    unawaited(_observeDolbyVisionProfile());
     _playingSubscription = player.stream.playing.listen(_handlePlayingChanged);
     _completedSubscription = player.stream.completed.listen(
       _handleCompletedChanged,
@@ -407,8 +413,9 @@ class PlayerController extends GetxController {
     _heightSubscription = player.stream.height.listen((_) {
       _updateAspectRatio();
     });
-    _videoParamsSubscription = player.stream.videoParams.listen((_) {
+    _videoParamsSubscription = player.stream.videoParams.listen((params) {
       _updateAspectRatio();
+      unawaited(_evaluateDolbyVisionShader(params));
     });
     _trackSubscription = player.stream.track.listen((track) {
       _syncSelectedAudioTrack(track.audio);
@@ -601,6 +608,7 @@ class PlayerController extends GetxController {
   Future<void> _applyMpvDecodeMode() async {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
+    // DV Profile 5 的 RPU 只有软解路径会交给 libplacebo，MediaCodec 会丢弃它。
     final value = switch (effectiveDecodeMode) {
       // 硬解后端必须按平台选择：videotoolbox 只在 Apple 平台存在，
       // Android 对应 MediaCodec，Windows 是 D3D11VA，Linux 是 VAAPI。
@@ -708,6 +716,10 @@ class PlayerController extends GetxController {
           _voFallbackTimer?.cancel();
           if (_voFallbackApplied) {
             _voFallbackHealthy = true;
+          } else if (_dolbyVisionModeActive && _doviShaderFilePath != null) {
+            try {
+              await platform.setProperty('glsl-shaders', _doviShaderFilePath!);
+            } catch (_) {}
           }
           return;
         }
@@ -757,6 +769,7 @@ class PlayerController extends GetxController {
       await platform.setProperty('vo', 'null');
       await platform.setProperty('hwdec', 'mediacodec');
       _appliedHwdec = 'mediacodec';
+      _dolbyVisionModeActive = false;
       await platform.setProperty('vo', 'mediacodec_embed');
       // mediacodec_embed 需要重新初始化 vid，否则会报 Could not open codec。
       await platform.setProperty('vid', 'auto');
@@ -776,6 +789,198 @@ class PlayerController extends GetxController {
     );
   }
 
+  /// Dolby Vision Profile 5（bl_signal_compatibility_id=0）的基础层是杜比私有 IPTPQc2，
+  /// media_kit 内置的 mpv 0.36 编译时未开启 libplacebo（无 gpu-next），会把画面按普通
+  /// BT.709 矩阵解码，导致无论本地代理还是 302 云转码流都出现明显的偏绿/偏紫。
+  /// 这里通过 vo=gpu 的自定义 GLSL 着色器在像素阶段把错误映射的 RGB 反算回 IPTPQc2，
+  /// 再经 PQ EOTF + LMS->BT.709 + Hable 色调映射还原正确色彩，Android 与 iOS 通用且保持硬解。
+  Future<void> _observeDolbyVisionProfile() async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.observeProperty(
+        'current-tracks/video/dolby-vision-profile',
+        (value) async => _handleDolbyVisionProfileChanged(value),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _handleDolbyVisionProfileChanged(String value) async {
+    final profile = int.tryParse(value.trim());
+    if (profile == 5) {
+      await _enterDolbyVisionMode();
+      return;
+    }
+    if (profile != null &&
+        profile != 5 &&
+        _dolbyVisionModeActive &&
+        !_dolbyVisionModeSwitching) {
+      await _restoreDefaultVideoPipeline();
+    }
+  }
+
+  static const String _doviP5GlslShader = r'''//!HOOK MAIN
+//!BIND HOOKED
+//!DESC Dolby Vision Profile 5 (IPTPQc2 -> BT.709 SDR)
+
+vec3 pq_eotf(vec3 n) {
+    n = clamp(n, 0.0, 1.0);
+    vec3 np = pow(n, vec3(1.0 / 78.84375));
+    vec3 num = max(np - 0.8359375, 0.0);
+    vec3 den = 18.8515625 - 18.6875 * np;
+    return pow(num / max(den, 1e-6), vec3(1.0 / 0.1593017578125));
+}
+
+vec3 hable_Curve(vec3 x) {
+    return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
+}
+
+vec4 hook() {
+    vec4 color = HOOKED_tex(HOOKED_pos);
+    // mpv 默认把未识别的流按 BT.709 矩阵转成了 RGB：
+    // R = Y + 1.5748*Cr, G = Y - 0.1873*Cb - 0.4681*Cr, B = Y + 1.8556*Cb
+    // 先精确反算出原始的 (I, Ct, Cp)：
+    float R = color.r;
+    float G = color.g;
+    float B = color.b;
+    float Cr = (R - G - 0.1009911 * (B - R)) / 1.8838896;
+    float Y  = R - 1.5748 * Cr;
+    float Cb = (B - Y) / 1.8556;
+
+    // Profile 5 IPTPQc2 使用 full range + reshape 偏移缩放近似还原：
+    float I  = clamp(Y * 1.12 - 0.04, 0.0, 1.0);
+    float Ct = clamp(Cb * 1.05, -0.5, 0.5);
+    float Cp = clamp(Cr * 1.05, -0.5, 0.5);
+
+    // IPTPQc2 -> 非线性 LMS' (c2 交叉矩阵逆变换)：
+    vec3 lms_pq = vec3(
+        I + 0.097569 * Ct + 0.205226 * Cp,
+        I - 0.113876 * Ct + 0.133217 * Cp,
+        I + 0.032615 * Ct - 0.676887 * Cp
+    );
+
+    // PQ EOTF -> 线性 LMS（1.0 = 10000 cd/m^2）：
+    vec3 lms = pq_eotf(lms_pq);
+
+    // Hunt-Pointer-Estevez LMS -> 线性 BT.709 RGB：
+    vec3 rgb = vec3(
+         5.432622 * lms.x - 4.679100 * lms.y + 0.246257 * lms.z,
+        -1.105170 * lms.x + 2.311198 * lms.y - 0.205880 * lms.z,
+         0.028104 * lms.x - 0.194660 * lms.y + 1.166325 * lms.z
+    );
+    rgb = max(rgb, 0.0);
+
+    // 换算到 203 nits SDR 基准并做 Hable 色调映射：
+    rgb *= (10000.0 / 203.0);
+    rgb = hable_Curve(rgb * 2.0) / hable_Curve(vec3(10.0));
+    rgb = clamp(rgb, 0.0, 1.0);
+
+    // 转为 BT.1886 / Gamma 2.2 输出（匹配 mpv dumb mode 直接输出）：
+    color.rgb = pow(rgb, vec3(1.0 / 2.2));
+    return color;
+}
+''';
+
+  String? _doviShaderFilePath;
+
+  Future<String?> _ensureDoviShaderFile() async {
+    if (_doviShaderFilePath != null) return _doviShaderFilePath;
+    try {
+      final file = File(
+        '${Directory.systemTemp.path}/wpan_dovi_p5_tonemap.glsl',
+      );
+      await file.writeAsString(_doviP5GlslShader, flush: true);
+      _doviShaderFilePath = file.path;
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _enterDolbyVisionMode() async {
+    if (_dolbyVisionModeActive || _dolbyVisionModeSwitching) return;
+    if (_voFallbackApplied) return;
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    _dolbyVisionModeSwitching = true;
+    try {
+      final shaderPath = await _ensureDoviShaderFile();
+      if (shaderPath == null) return;
+      _dolbyVisionModeActive = true;
+      await platform.setProperty('glsl-shaders', shaderPath);
+    } catch (_) {
+    } finally {
+      _dolbyVisionModeSwitching = false;
+    }
+  }
+
+  Future<void> _restoreDefaultVideoPipeline() async {
+    if (!_dolbyVisionModeActive) return;
+    final platform = player.platform;
+    _dolbyVisionModeActive = false;
+    if (platform is! NativePlayer) return;
+    _dolbyVisionModeSwitching = true;
+    try {
+      await platform.setProperty('glsl-shaders', '');
+    } catch (_) {
+    } finally {
+      _dolbyVisionModeSwitching = false;
+    }
+  }
+
+  bool _looksLikeDolbyVisionSource() {
+    final candidates = <String?>[
+      _currentEpisodePath,
+      _openingEpisodePath,
+      _currentEpisodeUrl,
+      _openingEpisodeUrl,
+      _currentEpisode?.title,
+      _folderPath,
+      resourceTitle.value,
+    ];
+    for (final raw in candidates) {
+      if (raw == null || raw.isEmpty) continue;
+      String decoded = raw;
+      try {
+        decoded = Uri.decodeFull(raw);
+      } catch (_) {}
+      final text = decoded.toLowerCase();
+      if (text.contains('dovi') ||
+          text.contains('dolby vision') ||
+          text.contains('dolbyvision') ||
+          text.contains('杜比视界') ||
+          RegExp(r'(?:^|[.\s_\-\[\(])dv(?:$|[.\s_\-\]\)])').hasMatch(text)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// MKV 封装或 302 云转码流在 mpv 0.36 下不会上报 dolby-vision-profile，
+  /// 且伽马曲线会被标成普通 bt.1886（而非标准 HDR10/Profile 8 的 pq/hlg）。
+  /// 此时结合片源路径/标题中的杜比视界标识自动挂载或卸载着色器。
+  Future<void> _evaluateDolbyVisionShader(VideoParams params) async {
+    final width = params.dw ?? params.w ?? 0;
+    final height = params.dh ?? params.h ?? 0;
+    if (width <= 0 || height <= 0) return;
+
+    final gamma = (params.gamma ?? '').trim().toLowerCase();
+    final primaries = (params.primaries ?? '').trim().toLowerCase();
+    // 标准 HDR10 / HLG / DV Profile 8 兼容层带有 pq/hlg 曲线和 bt.2020 原色，
+    // 由 mpv 内置的 tone-mapping 处理即可，不应叠加 IPTPQc2 反算着色器。
+    final isStandardHdr =
+        gamma == 'pq' ||
+        gamma == 'smpte2084' ||
+        gamma == 'arib-std-b67' ||
+        gamma == 'hlg' ||
+        primaries == 'bt.2020';
+    if (!isStandardHdr && _looksLikeDolbyVisionSource()) {
+      await _enterDolbyVisionMode();
+    } else if (_dolbyVisionModeActive) {
+      await _restoreDefaultVideoPipeline();
+    }
+  }
+
   Future<void> _applyMpvColorPipeline() async {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
@@ -791,6 +996,7 @@ class PlayerController extends GetxController {
     try {
       await player.stop();
     } catch (_) {}
+    await _restoreDefaultVideoPipeline();
     _resetAudioTrackState();
     _resetSubtitleTrackState();
     unawaited(WakelockPlus.disable());
@@ -941,6 +1147,7 @@ class PlayerController extends GetxController {
       _openingEpisodePath = episodePath;
       _openingEpisodeUrl = url;
       await player.stop();
+      await _restoreDefaultVideoPipeline();
       _resetAudioTrackState();
       _resetSubtitleTrackState();
       _currentEpisodePath = episodePath;
@@ -1407,6 +1614,7 @@ class PlayerController extends GetxController {
       _openingEpisodePath = episodePath;
       _openingEpisodeUrl = url;
       await player.stop();
+      await _restoreDefaultVideoPipeline();
       _resetAudioTrackState();
       _resetSubtitleTrackState();
       _currentEpisodePath = episodePath;
