@@ -52,6 +52,9 @@ flutter:
     - assets/images/
     - assets/env/
 
+  shaders:
+    - shaders/dovi_p5_tonemap.frag
+
   fonts:
     - family: AlibabaPuHuiTi
       fonts:

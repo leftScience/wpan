@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -139,6 +140,9 @@ class PlayerController extends GetxController {
   /// 当前片源是 Dolby Vision Profile 5（或被云转码错转的 DV P5 流）时启用 GLSL 色彩校正着色器。
   bool _dolbyVisionModeActive = false;
   bool _dolbyVisionModeSwitching = false;
+  bool _dolbyVisionProfile5Confirmed = false;
+  final RxBool useFlutterDolbyVisionFilter = false.obs;
+  ui.FragmentProgram? _doviFragmentProgram;
   String? _last302TargetUrl;
   String? _last302ErrorMessage;
 
@@ -716,7 +720,9 @@ class PlayerController extends GetxController {
           _voFallbackTimer?.cancel();
           if (_voFallbackApplied) {
             _voFallbackHealthy = true;
-          } else if (_dolbyVisionModeActive && _doviShaderFilePath != null) {
+          } else if (_dolbyVisionModeActive &&
+              !useFlutterDolbyVisionFilter.value &&
+              _doviShaderFilePath != null) {
             try {
               await platform.setProperty('glsl-shaders', _doviShaderFilePath!);
             } catch (_) {}
@@ -765,6 +771,7 @@ class PlayerController extends GetxController {
       return;
     }
     final position = player.state.position;
+    final wasDolbyVision = _dolbyVisionModeActive;
     try {
       await platform.setProperty('vo', 'null');
       await platform.setProperty('hwdec', 'mediacodec');
@@ -782,6 +789,9 @@ class PlayerController extends GetxController {
     }
     if (_voFallbackApplied) return;
     _voFallbackApplied = true;
+    if (wasDolbyVision) {
+      unawaited(_enterDolbyVisionMode());
+    }
     Get.snackbar(
       '播放器兼容模式',
       '当前设备无法使用 GPU 渲染，已切换到 MediaCodec 输出',
@@ -808,14 +818,15 @@ class PlayerController extends GetxController {
   Future<void> _handleDolbyVisionProfileChanged(String value) async {
     final profile = int.tryParse(value.trim());
     if (profile == 5) {
+      _dolbyVisionProfile5Confirmed = true;
       await _enterDolbyVisionMode();
       return;
     }
-    if (profile != null &&
-        profile != 5 &&
-        _dolbyVisionModeActive &&
-        !_dolbyVisionModeSwitching) {
-      await _restoreDefaultVideoPipeline();
+    if (profile != null && profile != 5) {
+      _dolbyVisionProfile5Confirmed = false;
+      if (_dolbyVisionModeActive && !_dolbyVisionModeSwitching) {
+        await _restoreDefaultVideoPipeline();
+      }
     }
   }
 
@@ -847,20 +858,28 @@ vec4 hook() {
     float Y  = R - 1.5748 * Cr;
     float Cb = (B - Y) / 1.8556;
 
-    // Profile 5 IPTPQc2 使用 full range + reshape 偏移缩放近似还原：
-    float I  = clamp(Y * 1.12 - 0.04, 0.0, 1.0);
-    float Ct = clamp(Cb * 1.05, -0.5, 0.5);
-    float Cp = clamp(Cr * 1.05, -0.5, 0.5);
+    // 杜比视界 Profile 5 RPU 映射多项式还原：
+    // 1. 亮度通道 I 采用 RPU 2 阶分段多项式的凹曲线拟合
+    // 2. 色度通道 Ct/Cp 在编码时存在非对称偏移（中性灰位于 U≈457, V≈436 而非 512）
+    float chroma_gate = smoothstep(0.03, 0.12, Y);
+    float I = clamp(0.84 * pow(max(Y - 0.01, 0.0), 0.85), 0.0, 1.0);
+    float Ct = clamp(0.0715 * chroma_gate + 1.28 * Cb, -0.5, 0.5);
+    float cp_bias = (0.055 + 0.60 * max(Cb, 0.0)) * chroma_gate;
+    float Cp = clamp(cp_bias + 1.28 * Cr, -0.5, 0.5);
 
-    // IPTPQc2 -> 非线性 LMS' (c2 交叉矩阵逆变换)：
+    // RPU ycc_to_rgb_matrix (IPTPQc2 -> 非线性 LMS_PQ)：
     vec3 lms_pq = vec3(
-        I + 0.097569 * Ct + 0.205226 * Cp,
-        I - 0.113876 * Ct + 0.133217 * Cp,
-        I + 0.032615 * Ct - 0.676887 * Cp
+        I + 0.097534 * Ct + 0.205200 * Cp,
+        I - 0.113892 * Ct + 0.133179 * Cp,
+        I + 0.032593 * Ct - 0.676880 * Cp
     );
 
     // PQ EOTF -> 线性 LMS（1.0 = 10000 cd/m^2）：
     vec3 lms = pq_eotf(lms_pq);
+
+    // RPU rgb_to_lms_matrix 交叉串扰矩阵校正：
+    float sum_lms = lms.x + lms.y + lms.z;
+    lms = 1.06384 * lms - 0.02130 * vec3(sum_lms);
 
     // Hunt-Pointer-Estevez LMS -> 线性 BT.709 RGB：
     vec3 rgb = vec3(
@@ -872,7 +891,7 @@ vec4 hook() {
 
     // 换算到 203 nits SDR 基准并做 Hable 色调映射：
     rgb *= (10000.0 / 203.0);
-    rgb = hable_Curve(rgb * 2.0) / hable_Curve(vec3(10.0));
+    rgb = hable_Curve(rgb * 2.2) / hable_Curve(vec3(10.0));
     rgb = clamp(rgb, 0.0, 1.0);
 
     // 转为 BT.1886 / Gamma 2.2 输出（匹配 mpv dumb mode 直接输出）：
@@ -897,16 +916,49 @@ vec4 hook() {
     }
   }
 
+  Future<ui.FragmentProgram?> _ensureDoviFragmentProgram() async {
+    if (_doviFragmentProgram != null) return _doviFragmentProgram;
+    try {
+      _doviFragmentProgram = await ui.FragmentProgram.fromAsset(
+        'shaders/dovi_p5_tonemap.frag',
+      );
+      return _doviFragmentProgram;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 创建用于 Flutter Impeller 渲染管线的杜比视界 Profile 5 像素着色器滤镜（iOS 真机/模拟器及 Android 兼容模式通用）。
+  ui.ImageFilter? createDolbyVisionImageFilter() {
+    final program = _doviFragmentProgram;
+    if (program != null && ui.ImageFilter.isShaderFilterSupported) {
+      try {
+        return ui.ImageFilter.shader(program.fragmentShader());
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  bool get _shouldUseFlutterDolbyVisionFilter =>
+      defaultTargetPlatform != TargetPlatform.android || _voFallbackApplied;
+
   Future<void> _enterDolbyVisionMode() async {
     if (_dolbyVisionModeActive || _dolbyVisionModeSwitching) return;
-    if (_voFallbackApplied) return;
     final platform = player.platform;
     if (platform is! NativePlayer) return;
     _dolbyVisionModeSwitching = true;
     try {
+      if (_shouldUseFlutterDolbyVisionFilter) {
+        final program = await _ensureDoviFragmentProgram();
+        if (program == null) return;
+        _dolbyVisionModeActive = true;
+        useFlutterDolbyVisionFilter.value = true;
+        return;
+      }
       final shaderPath = await _ensureDoviShaderFile();
       if (shaderPath == null) return;
       _dolbyVisionModeActive = true;
+      useFlutterDolbyVisionFilter.value = false;
       await platform.setProperty('glsl-shaders', shaderPath);
     } catch (_) {
     } finally {
@@ -915,9 +967,11 @@ vec4 hook() {
   }
 
   Future<void> _restoreDefaultVideoPipeline() async {
-    if (!_dolbyVisionModeActive) return;
+    _dolbyVisionProfile5Confirmed = false;
+    if (!_dolbyVisionModeActive && !useFlutterDolbyVisionFilter.value) return;
     final platform = player.platform;
     _dolbyVisionModeActive = false;
+    useFlutterDolbyVisionFilter.value = false;
     if (platform is! NativePlayer) return;
     _dolbyVisionModeSwitching = true;
     try {
@@ -963,6 +1017,12 @@ vec4 hook() {
     final width = params.dw ?? params.w ?? 0;
     final height = params.dh ?? params.h ?? 0;
     if (width <= 0 || height <= 0) return;
+
+    final colormatrix = (params.colormatrix ?? '').trim().toLowerCase();
+    if (_dolbyVisionProfile5Confirmed || colormatrix == 'dolbyvision') {
+      await _enterDolbyVisionMode();
+      return;
+    }
 
     final gamma = (params.gamma ?? '').trim().toLowerCase();
     final primaries = (params.primaries ?? '').trim().toLowerCase();

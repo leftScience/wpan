@@ -2173,7 +2173,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                               ? BoxFit.cover
                               : BoxFit.contain)
                         : BoxFit.contain;
-                    return Video(
+                    final videoWidget = Video(
                       controller: controller.videoController,
                       fit: fit,
                       fill: const Color(0xFF111111),
@@ -2321,6 +2321,17 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                           DeviceOrientation.portraitUp,
                         ]);
                       },
+                    );
+                    if (!controller.useFlutterDolbyVisionFilter.value) {
+                      return videoWidget;
+                    }
+                    final filter = controller.createDolbyVisionImageFilter();
+                    if (filter == null) {
+                      return videoWidget;
+                    }
+                    return ImageFiltered(
+                      imageFilter: filter,
+                      child: videoWidget,
                     );
                   }),
                 ),
