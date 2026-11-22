@@ -41,27 +41,30 @@ class _HistoryViewState extends State<HistoryView> {
       backgroundColor: AppThemeColors.pageBackground,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        centerTitle: false,
+        centerTitle: true,
         elevation: 0,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 3.w,
-              height: 18.h,
+        leadingWidth: 64.w,
+        leading: Padding(
+          padding: EdgeInsets.only(left: 16.w, top: 6.h, bottom: 6.h),
+          child: GestureDetector(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: Container(
+              width: 43.w,
+              height: 43.w,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(2.r),
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF7C4DFF), Color(0xFF448AFF)],
-                ),
+                shape: BoxShape.circle,
+                color: AppThemeColors.primary.withValues(alpha: 0.19),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                Icons.arrow_back_rounded,
+                color: AppThemeColors.textPrimary,
+                size: 20.r,
               ),
             ),
-            SizedBox(width: 8.w),
-            const Text('历史记录'),
-          ],
+          ),
         ),
+        title: const Text('历史记录'),
       ),
       body: Column(
         children: [
@@ -134,14 +137,17 @@ class _HistoryViewState extends State<HistoryView> {
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
                             gradient: const LinearGradient(
-                              colors: [Color(0xFF7C4DFF), Color(0xFF448AFF)],
+                              colors: [
+                                AppThemeColors.primary,
+                                AppThemeColors.primaryDeep,
+                              ],
                             ),
                             borderRadius: BorderRadius.circular(24),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(
-                                  0xFF7C4DFF,
-                                ).withValues(alpha: 0.3),
+                                color: AppThemeColors.primary.withValues(
+                                  alpha: 0.28,
+                                ),
                                 blurRadius: 10,
                                 offset: const Offset(0, 3),
                               ),

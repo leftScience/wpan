@@ -185,13 +185,13 @@ class MeView extends GetView<MeController> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Color(0xFF2496C7),
-                  Color(0xFF1565C0),
-                  Color(0xFF0B1F5E),
+                  Color(0xFF8CC8FF),
+                  Color(0xFF9570FF),
+                  Color(0xFF5E35B1),
                 ],
               ),
-              borderRadius: BorderRadius.circular(22.r),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+              borderRadius: BorderRadius.circular(24.r),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
             ),
             child: Stack(
               children: [

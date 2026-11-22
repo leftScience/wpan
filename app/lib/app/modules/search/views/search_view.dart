@@ -80,14 +80,26 @@ class _SearchViewState extends State<SearchView> {
             backgroundColor: AppThemeColors.pageBackground,
             elevation: 0,
             titleSpacing: 0,
-            leadingWidth: 48,
-            leading: IconButton(
-              padding: EdgeInsets.zero,
-              icon: const Icon(
-                Icons.arrow_back,
-                color: AppThemeColors.textPrimary,
+            leadingWidth: 64.w,
+            leading: Padding(
+              padding: EdgeInsets.only(left: 14.w, right: 8.w, top: 6.h, bottom: 6.h),
+              child: GestureDetector(
+                onTap: _handleBack,
+                child: Container(
+                  width: 42.w,
+                  height: 42.w,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppThemeColors.primary.withValues(alpha: 0.19),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.arrow_back_rounded,
+                    color: AppThemeColors.textPrimary,
+                    size: 20.r,
+                  ),
+                ),
               ),
-              onPressed: _handleBack,
             ),
             title: Padding(
               padding: const EdgeInsets.only(right: 12),

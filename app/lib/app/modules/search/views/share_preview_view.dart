@@ -23,9 +23,28 @@ class SharePreviewView extends GetView<SharePreviewController> {
         child: Scaffold(
           backgroundColor: AppThemeColors.pageBackground,
           appBar: AppBar(
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded),
-              onPressed: controller.popDir,
+            backgroundColor: Colors.transparent,
+            centerTitle: true,
+            leadingWidth: 64.w,
+            leading: Padding(
+              padding: EdgeInsets.only(left: 16.w, top: 6.h, bottom: 6.h),
+              child: GestureDetector(
+                onTap: controller.popDir,
+                child: Container(
+                  width: 42.w,
+                  height: 42.w,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppThemeColors.primary.withValues(alpha: 0.19),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.arrow_back_rounded,
+                    color: AppThemeColors.textPrimary,
+                    size: 20.r,
+                  ),
+                ),
+              ),
             ),
             title: Text(
               controller.displayTitle,
@@ -33,9 +52,25 @@ class SharePreviewView extends GetView<SharePreviewController> {
               overflow: TextOverflow.ellipsis,
             ),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.refresh_rounded),
-                onPressed: controller.refreshCurrent,
+              Padding(
+                padding: EdgeInsets.only(right: 14.w),
+                child: GestureDetector(
+                  onTap: controller.refreshCurrent,
+                  child: Container(
+                    width: 42.w,
+                    height: 42.w,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppThemeColors.primary.withValues(alpha: 0.14),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.refresh_rounded,
+                      color: AppThemeColors.textPrimary,
+                      size: 20.r,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),

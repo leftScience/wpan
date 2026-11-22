@@ -22,8 +22,9 @@ class TvView extends GetView<TvController> {
       controller: controller,
       iconBuilder: (entry) =>
           entry.isDir ? Icons.folder_rounded : Icons.play_circle_fill_rounded,
-      iconColorBuilder: (entry) =>
-          entry.isDir ? const Color(0xFFD97706) : const Color(0xFF0284C7),
+      iconColorBuilder: (entry) => entry.isDir
+          ? const Color(0xFF9570FF)
+          : const Color(0xFF7C4DFF),
       onFolderTap: (entry, _, _) => _onFolderTap(entry),
       onFileTap: (entry, _, currentPath) => _onFileTap(entry, currentPath),
       shouldAutoOpen: (entries, _) => _videoHelper.shouldAutoOpen(entries),

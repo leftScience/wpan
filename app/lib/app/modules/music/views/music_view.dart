@@ -21,8 +21,9 @@ class MusicView extends GetView<MusicController> {
       controller: controller,
       iconBuilder: (entry) =>
           entry.isDir ? Icons.folder_rounded : Icons.podcasts_rounded,
-      iconColorBuilder: (entry) =>
-          entry.isDir ? Colors.amber : Colors.pinkAccent,
+      iconColorBuilder: (entry) => entry.isDir
+          ? const Color(0xFF9570FF)
+          : const Color(0xFFEB5757),
       onFolderTap: (entry, _, _) => _onFolderTap(entry),
       onFileTap: (entry, _, currentPath) => _onFileTap(entry, currentPath),
       shouldAutoOpen: (entries, _) => _audioHelper.shouldAutoOpen(entries),

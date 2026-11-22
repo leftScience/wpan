@@ -206,9 +206,8 @@ class _HomeBodyState extends State<_HomeBody>
   Widget _buildMessageButton() {
     return Obx(() {
       final unreadCount = widget.controller.unreadMessageCount;
-      final size = 42.w;
+      final size = 43.w;
       final iconSize = 21.w;
-      final radius = BorderRadius.circular(14.r);
 
       return Semantics(
         button: true,
@@ -222,41 +221,23 @@ class _HomeBodyState extends State<_HomeBody>
                 width: size,
                 height: size,
                 decoration: BoxDecoration(
-                  color: AppThemeColors.surface.withValues(alpha: 0.92),
-                  borderRadius: radius,
-                  border: Border.all(
-                    color: unreadCount > 0
-                        ? AppThemeColors.primary.withValues(alpha: 0.28)
-                        : AppThemeColors.border,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          (unreadCount > 0
-                                  ? AppThemeColors.primary
-                                  : AppThemeColors.shadowSoft)
-                              .withValues(alpha: unreadCount > 0 ? 0.14 : 0.05),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  shape: BoxShape.circle,
+                  color: AppThemeColors.primary.withValues(alpha: 0.19),
                 ),
                 child: Center(
                   child: Icon(
                     unreadCount > 0
                         ? Icons.notifications_active_rounded
                         : Icons.notifications_none_rounded,
-                    color: unreadCount > 0
-                        ? AppThemeColors.primary
-                        : AppThemeColors.textPrimary,
+                    color: AppThemeColors.textPrimary,
                     size: iconSize,
                   ),
                 ),
               ),
               if (unreadCount > 0)
                 Positioned(
-                  right: -3.w,
-                  top: -3.h,
+                  right: -2.w,
+                  top: -2.h,
                   child: Container(
                     constraints: BoxConstraints(
                       minWidth: 17.w,
@@ -267,23 +248,12 @@ class _HomeBodyState extends State<_HomeBody>
                       vertical: 1.h,
                     ),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFF5252), Color(0xFFD32F2F)],
-                      ),
+                      color: AppThemeColors.danger,
                       borderRadius: BorderRadius.circular(999.r),
                       border: Border.all(
                         color: AppThemeColors.surface,
                         width: 1.5,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(
-                            0xFFFF5252,
-                          ).withValues(alpha: 0.38),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
                     ),
                     child: Center(
                       child: Text(
@@ -391,33 +361,33 @@ class _HomeBodyState extends State<_HomeBody>
       _ResourceEntry(
         icon: Icons.movie_filter_rounded,
         label: '影视',
-        gradientColors: const [Color(0xFFEFF5FF), Color(0xFFDBEAFE)],
-        iconGradient: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-        accentColor: const Color(0xFF186EEF),
+        gradientColors: const [Color(0xFFF3EEFF), Color(0xFFE9E2FF)],
+        iconGradient: const [Color(0xFF9570FF), Color(0xFF7C4DFF)],
+        accentColor: const Color(0xFF9570FF),
         onTap: () => Get.toNamed(Routes.TV),
       ),
       _ResourceEntry(
         icon: Icons.bolt_rounded,
         label: '短剧',
-        gradientColors: const [Color(0xFFFFF7ED), Color(0xFFFFEDD5)],
-        iconGradient: const [Color(0xFFF97316), Color(0xFFEA580C)],
-        accentColor: const Color(0xFFE66A00),
+        gradientColors: const [Color(0xFFFDF2F8), Color(0xFFFCE7F3)],
+        iconGradient: const [Color(0xFFE270FF), Color(0xFFC026D3)],
+        accentColor: const Color(0xFFD946EF),
         onTap: () => Get.toNamed(Routes.PLAYLET),
       ),
       _ResourceEntry(
         icon: Icons.podcasts_rounded,
         label: '播客',
         gradientColors: const [Color(0xFFFFF1F2), Color(0xFFFFE4E6)],
-        iconGradient: const [Color(0xFFF43F5E), Color(0xFFE11D48)],
-        accentColor: const Color(0xFFE11D48),
+        iconGradient: const [Color(0xFFFF758C), Color(0xFFEB5757)],
+        accentColor: const Color(0xFFEB5757),
         onTap: () => Get.toNamed(Routes.MUSIC),
       ),
       _ResourceEntry(
         icon: Icons.auto_stories_rounded,
         label: '阅读',
         gradientColors: const [Color(0xFFECFDF5), Color(0xFFD1FAE5)],
-        iconGradient: const [Color(0xFF14B8A6), Color(0xFF0D9488)],
-        accentColor: const Color(0xFF0D9488),
+        iconGradient: const [Color(0xFF6FCF97), Color(0xFF10B981)],
+        accentColor: const Color(0xFF10B981),
         onTap: () => Get.toNamed(Routes.READ),
       ),
     ];

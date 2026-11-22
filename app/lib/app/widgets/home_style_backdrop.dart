@@ -75,8 +75,8 @@ class _HomeStyleBackdropState extends State<HomeStyleBackdrop>
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                             colors: [
-                              const Color(0xFFE2EEFF),
-                              const Color(0xFFEDE9FE).withValues(alpha: 0.72),
+                              const Color(0xFFF3EEFF),
+                              const Color(0xFFEAF4FF).withValues(alpha: 0.72),
                               AppThemeColors.pageBackground.withValues(
                                 alpha: 0,
                               ),
@@ -86,33 +86,33 @@ class _HomeStyleBackdropState extends State<HomeStyleBackdrop>
                         ),
                       ),
                     ),
-                    // 右上角主极光球（紫罗兰 → 品牌蓝呼吸位移）
+                    // 右上角主极光球（Figma #9570FF → #E270FF 呼吸位移）
                     Positioned(
                       top: (-68 + 18 * t).h,
                       right: (-36 + 22 * (1 - t)).w,
                       child: _BackdropGlow(
                         size: (280 + 18 * wave).w,
                         color: Color.lerp(
-                          const Color(0xFF7C4DFF),
-                          const Color(0xFF4F46E5),
+                          const Color(0xFF9570FF),
+                          const Color(0xFFE270FF),
                           t,
-                        )!.withValues(alpha: 0.14),
-                        innerAlpha: 0.04,
+                        )!.withValues(alpha: 0.16),
+                        innerAlpha: 0.05,
                         stop: 0.42,
                       ),
                     ),
-                    // 左上角辅极光球（天青蓝呼吸漂移）
+                    // 左上角辅极光球（Figma #8CC8FF → #70F8FF 呼吸漂移）
                     Positioned(
                       top: (84 - 20 * t).h,
                       left: (-68 + 24 * t).w,
                       child: _BackdropGlow(
                         size: (240 + 16 * (1 - wave)).w,
                         color: Color.lerp(
-                          const Color(0xFF186EEF),
-                          const Color(0xFF06B6D4),
+                          const Color(0xFF8CC8FF),
+                          const Color(0xFF70F8FF),
                           t,
-                        )!.withValues(alpha: 0.12),
-                        innerAlpha: 0.03,
+                        )!.withValues(alpha: 0.14),
+                        innerAlpha: 0.04,
                         stop: 0.48,
                       ),
                     ),

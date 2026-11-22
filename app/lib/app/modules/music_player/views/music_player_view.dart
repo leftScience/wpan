@@ -1763,9 +1763,9 @@ class _MusicPlayerViewState extends State<MusicPlayerView>
                   ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       );
     });
   }

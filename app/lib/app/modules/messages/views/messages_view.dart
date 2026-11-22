@@ -43,6 +43,29 @@ class _MessagesViewState extends State<MessagesView> {
     return Scaffold(
       backgroundColor: AppThemeColors.pageBackground,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        centerTitle: true,
+        leadingWidth: 64.w,
+        leading: Padding(
+          padding: EdgeInsets.only(left: 16.w, top: 6.h, bottom: 6.h),
+          child: GestureDetector(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: Container(
+              width: 43.w,
+              height: 43.w,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppThemeColors.primary.withValues(alpha: 0.19),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                Icons.arrow_back_rounded,
+                color: AppThemeColors.textPrimary,
+                size: 20.r,
+              ),
+            ),
+          ),
+        ),
         title: const Text('消息'),
         actions: [
           TextButton(
@@ -384,14 +407,17 @@ class _MessagesViewState extends State<MessagesView> {
                         padding: EdgeInsets.symmetric(vertical: 10.h),
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
-                            colors: [Color(0xFF7C4DFF), Color(0xFF448AFF)],
+                            colors: [
+                              AppThemeColors.primary,
+                              AppThemeColors.primaryDeep,
+                            ],
                           ),
                           borderRadius: BorderRadius.circular(24.r),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(
-                                0xFF7C4DFF,
-                              ).withValues(alpha: 0.3),
+                              color: AppThemeColors.primary.withValues(
+                                alpha: 0.28,
+                              ),
                               blurRadius: 10.r,
                               offset: Offset(0, 3.h),
                             ),

@@ -23,12 +23,12 @@ class ReadView extends GetView<ReadController> {
               _ReadFileType.unsupported => Icons.insert_drive_file_rounded,
             },
       iconColorBuilder: (entry) => entry.isDir
-          ? const Color(0xFFD97706)
+          ? const Color(0xFF9570FF)
           : switch (_fileType(entry.name)) {
-              _ReadFileType.epub => const Color(0xFF059669),
-              _ReadFileType.txt => const Color(0xFF2563EB),
-              _ReadFileType.pdf => const Color(0xFFDC2626),
-              _ReadFileType.unsupported => const Color(0xFF64748B),
+              _ReadFileType.epub => const Color(0xFF10B981),
+              _ReadFileType.txt => const Color(0xFF7C4DFF),
+              _ReadFileType.pdf => const Color(0xFFEB5757),
+              _ReadFileType.unsupported => const Color(0xFF828282),
             },
       statusBuilder: (entry) => entry.isDir
           ? '文件夹'

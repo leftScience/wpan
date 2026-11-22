@@ -218,6 +218,17 @@ class ReaderController extends GetxController {
   };
   static const themePresets = <ReaderThemePreset>[
     ReaderThemePreset(
+      id: 'aurora',
+      label: '极光雅白',
+      backgroundColor: Color(0xFFFAF9FE),
+      surfaceColor: Color(0xFFF3F0FC),
+      overlayColor: Color(0xCCFAF9FE),
+      textColor: Color(0xFF333333),
+      secondaryTextColor: Color(0xFF828282),
+      accentColor: Color(0xFF9570FF),
+      dividerColor: Color(0x1F9570FF),
+    ),
+    ReaderThemePreset(
       id: 'warm',
       label: '护眼米黄',
       backgroundColor: Color(0xFFF7F1E3),
@@ -236,7 +247,7 @@ class ReaderController extends GetxController {
       overlayColor: Color(0xCCFFFCF5),
       textColor: Color(0xFF191919),
       secondaryTextColor: Color(0xFF6E655D),
-      accentColor: Color(0xFF506A85),
+      accentColor: Color(0xFF9570FF),
       dividerColor: Color(0x14000000),
     ),
     ReaderThemePreset(
@@ -247,18 +258,18 @@ class ReaderController extends GetxController {
       overlayColor: Color(0xCC1B211D),
       textColor: Color(0xFFE7E1C8),
       secondaryTextColor: Color(0xFFB4AD95),
-      accentColor: Color(0xFF7CA27C),
+      accentColor: Color(0xFF8ED18E),
       dividerColor: Color(0x1FFFFFFF),
     ),
     ReaderThemePreset(
       id: 'ink',
       label: '深墨黑',
       backgroundColor: Color(0xFF111315),
-      surfaceColor: Color(0xFF171A1D),
+      surfaceColor: Color(0xFF1A1D21),
       overlayColor: Color(0xCC111315),
       textColor: Color(0xFFF1EBDC),
       secondaryTextColor: Color(0xFFB6AFA1),
-      accentColor: Color(0xFF9A8C6D),
+      accentColor: Color(0xFFB39DFF),
       dividerColor: Color(0x1FFFFFFF),
     ),
   ];

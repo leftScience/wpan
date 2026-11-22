@@ -25,7 +25,7 @@ class RegisterView extends GetView<RegisterController> {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Color(0xFFEAF2FF), Color(0xFFF6F8FD)],
+                colors: [Color(0xFFF3EEFF), Color(0xFFFAF9FE)],
               ),
             ),
           ),
@@ -37,7 +37,7 @@ class RegisterView extends GetView<RegisterController> {
               height: 300.w,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF3B82F6).withValues(alpha: 0.16),
+                color: const Color(0xFF9570FF).withValues(alpha: 0.20),
               ),
             ),
           ),
@@ -49,7 +49,7 @@ class RegisterView extends GetView<RegisterController> {
               height: 250.w,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF8B5CF6).withValues(alpha: 0.14),
+                color: const Color(0xFF8CC8FF).withValues(alpha: 0.18),
               ),
             ),
           ),
@@ -394,11 +394,11 @@ class _SubmitButton extends GetView<RegisterController> {
         width: double.infinity,
         height: 52.h,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16.r),
+          borderRadius: BorderRadius.circular(20.r),
           gradient: LinearGradient(
             colors: isDisabled
                 ? const [Color(0xFFCBD5E1), Color(0xFFB4C0D3)]
-                : const [Color(0xFF3B82F6), Color(0xFF2563EB)],
+                : const [Color(0xFF9570FF), Color(0xFF7C4DFF)],
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
           ),
@@ -407,10 +407,10 @@ class _SubmitButton extends GetView<RegisterController> {
               color:
                   (isDisabled
                           ? const Color(0xFFCBD5E1)
-                          : const Color(0xFF3B82F6))
-                      .withValues(alpha: 0.3),
-              blurRadius: 12.r,
-              offset: Offset(0, 4.h),
+                          : const Color(0xFF9570FF))
+                      .withValues(alpha: 0.32),
+              blurRadius: 16.r,
+              offset: Offset(0, 6.h),
             ),
           ],
         ),

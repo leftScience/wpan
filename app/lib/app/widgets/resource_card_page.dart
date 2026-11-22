@@ -10,6 +10,7 @@ import '../routes/app_pages.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/quark_error_helper.dart';
+import 'home_style_backdrop.dart';
 import 'selection_bottom_sheet.dart';
 
 const List<String> _kDefaultEntryBlacklist = <String>[''];
@@ -232,23 +233,46 @@ class _ResourceCardPageState extends State<ResourceCardPage> {
       final sortDisabled = actionDisabled || loadingMore;
 
       return Scaffold(
+        backgroundColor: AppThemeColors.pageBackground,
         appBar: AppBar(
-          titleSpacing: 4,
-          leadingWidth: 40,
-          automaticallyImplyLeading: !widget.controller.canGoBack,
-          leading: widget.controller.canGoBack
-              ? IconButton(
-                  onPressed: widget.controller.popDir,
-                  icon: const Icon(Icons.arrow_back),
-                )
-              : null,
-          actionsPadding: const EdgeInsets.only(right: 4),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leadingWidth: 64,
+          automaticallyImplyLeading: false,
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 16, top: 6, bottom: 6),
+            child: GestureDetector(
+              onTap: widget.controller.canGoBack
+                  ? widget.controller.popDir
+                  : () => Navigator.of(context).maybePop(),
+              child: Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppThemeColors.primary.withValues(alpha: 0.19),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.arrow_back_rounded,
+                  color: AppThemeColors.textPrimary,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+          actionsPadding: const EdgeInsets.only(right: 12),
           title: Text(
             widget.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppThemeColors.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 21,
+            ),
           ),
-          centerTitle: false,
+          centerTitle: true,
           actions: [
             if (widget.enableRename && idleCardActionsVisible)
               TextButton(
@@ -280,29 +304,45 @@ class _ResourceCardPageState extends State<ResourceCardPage> {
             if (idleCardActionsVisible)
               IconButton(
                 onPressed: actionDisabled ? null : _hideCardActions,
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close_rounded),
               )
             else if (!_cardActionsVisible)
-              IconButton(
-                onPressed: actionDisabled
-                    ? null
-                    : widget.controller.refreshCurrent,
-                icon: const Icon(Icons.refresh),
+              GestureDetector(
+                onTap: actionDisabled ? null : widget.controller.refreshCurrent,
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppThemeColors.primary.withValues(alpha: 0.14),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.refresh_rounded,
+                    color: AppThemeColors.textPrimary,
+                    size: 20,
+                  ),
+                ),
               ),
           ],
         ),
-        body: _buildBody(
-          currentPath: path,
-          entries: entries,
-          hasSourceEntries: allEntries.isNotEmpty,
-          loading: loading,
-          loadingMore: loadingMore,
-          hasMore: hasMore,
-          error: error,
-          loadMoreError: loadMoreError,
-          authError: authError,
-          currentSort: currentSort,
-          sortDisabled: sortDisabled,
+        body: Stack(
+          children: [
+            const HomeStyleBackdrop(),
+            _buildBody(
+              currentPath: path,
+              entries: entries,
+              hasSourceEntries: allEntries.isNotEmpty,
+              loading: loading,
+              loadingMore: loadingMore,
+              hasMore: hasMore,
+              error: error,
+              loadMoreError: loadMoreError,
+              authError: authError,
+              currentSort: currentSort,
+              sortDisabled: sortDisabled,
+            ),
+          ],
         ),
       );
     });
@@ -1149,21 +1189,15 @@ class _ResourceCardPageState extends State<ResourceCardPage> {
     return Container(
       decoration: BoxDecoration(
         color: AppThemeColors.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: borderColor, width: borderWidth),
-        boxShadow: [
-          BoxShadow(
-            color: AppThemeColors.shadowSoft,
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: AppThemeColors.cardShadow,
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(20),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(20),
           onTap: deleting
               ? null
               : () async {
@@ -1199,25 +1233,36 @@ class _ResourceCardPageState extends State<ResourceCardPage> {
                   });
                 },
           child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      iconBuilder(entry),
-                      color: iconColorBuilder(entry),
-                      size: 28,
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: iconColorBuilder(entry).withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(
+                        iconBuilder(entry),
+                        color: iconColorBuilder(entry),
+                        size: 22,
+                      ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         _breakPath(entry.name),
                         style: const TextStyle(
                           color: AppThemeColors.textPrimary,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                          height: 1.35,
                         ),
                       ),
                     ),
@@ -1237,13 +1282,30 @@ class _ResourceCardPageState extends State<ResourceCardPage> {
                 if (subtitle.isNotEmpty)
                   Text(
                     subtitle,
-                    style: const TextStyle(color: AppThemeColors.textSecondary),
+                    style: const TextStyle(
+                      color: AppThemeColors.textMuted,
+                      fontSize: 11.5,
+                    ),
                   ),
                 if (displayStatus.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    displayStatus,
-                    style: const TextStyle(color: AppThemeColors.textMuted),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppThemeColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      displayStatus,
+                      style: const TextStyle(
+                        color: AppThemeColors.primary,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ],
               ],

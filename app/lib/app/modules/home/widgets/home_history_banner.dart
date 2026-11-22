@@ -86,7 +86,7 @@ class HomeHistoryBanner extends GetView<HomeController> {
       final playing = hasActiveAudio && visiblyPlaying;
       final canPlay =
           (hasActiveAudio || entry != null) && !initializingPlayback;
-      final bannerRadius = BorderRadius.circular(18.r);
+      final bannerRadius = BorderRadius.circular(24.r);
       final leadingIcon = _resolveLeadingIcon(
         hasActiveAudio: hasActiveAudio,
         applicationType: entry?.applicationType,
@@ -99,11 +99,11 @@ class HomeHistoryBanner extends GetView<HomeController> {
           decoration: BoxDecoration(
             borderRadius: bannerRadius,
             boxShadow: [
-              ...AppThemeColors.cardShadow,
+              ...AppThemeColors.floatingShadow,
               if (playing)
                 BoxShadow(
-                  color: AppThemeColors.primary.withValues(alpha: 0.16),
-                  blurRadius: 16,
+                  color: AppThemeColors.primary.withValues(alpha: 0.22),
+                  blurRadius: 20,
                   offset: const Offset(0, 6),
                 ),
             ],
@@ -111,34 +111,35 @@ class HomeHistoryBanner extends GetView<HomeController> {
           child: ClipRRect(
             borderRadius: bannerRadius,
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 280),
                 width: double.infinity,
                 height: MainTabContentInsets.historyBannerHeight.h,
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
                 decoration: BoxDecoration(
-                  color: AppThemeColors.surface.withValues(alpha: 0.92),
+                  color: Colors.white.withValues(alpha: 0.86),
                   borderRadius: bannerRadius,
                   border: Border.all(
                     color: playing
-                        ? AppThemeColors.primary.withValues(alpha: 0.30)
-                        : AppThemeColors.border,
-                    width: 1,
+                        ? AppThemeColors.primary.withValues(alpha: 0.38)
+                        : Colors.white.withValues(alpha: 0.75),
+                    width: 1.2,
                   ),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
-                      width: 38.w,
-                      height: 38.w,
+                      width: 40.w,
+                      height: 40.w,
                       decoration: BoxDecoration(
                         gradient: hasActiveAudio
                             ? const LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                                 colors: [
+                                  Color(0xFF8CC8FF),
                                   AppThemeColors.primary,
                                   AppThemeColors.accent,
                                 ],
@@ -147,17 +148,17 @@ class HomeHistoryBanner extends GetView<HomeController> {
                         color: hasActiveAudio
                             ? null
                             : entry != null
-                            ? AppThemeColors.primary.withValues(alpha: 0.10)
+                            ? AppThemeColors.primary.withValues(alpha: 0.14)
                             : AppThemeColors.surfaceSunken,
-                        borderRadius: BorderRadius.circular(12.r),
+                        borderRadius: BorderRadius.circular(14.r),
                         boxShadow: hasActiveAudio
                             ? [
                                 BoxShadow(
                                   color: AppThemeColors.primary.withValues(
                                     alpha: 0.28,
                                   ),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
                                 ),
                               ]
                             : null,
@@ -445,8 +446,55 @@ class _BannerIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final buttonSize = 34.w;
+    final buttonSize = 36.w;
     final enabled = onPressed != null;
+
+    if (isPrimary && enabled) {
+      return Semantics(
+        button: true,
+        enabled: true,
+        label: tooltip,
+        child: GestureDetector(
+          onTap: onPressed,
+          child: Container(
+            width: buttonSize,
+            height: buttonSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const SweepGradient(
+                colors: [
+                  Color(0xFF70F8FF),
+                  Color(0xFF9570FF),
+                  Color(0xFFE270FF),
+                  Color(0xFF707AFF),
+                  Color(0xFF70FFB9),
+                  Color(0xFF70F8FF),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppThemeColors.primary.withValues(alpha: 0.22),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            padding: EdgeInsets.all(2.w),
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.90),
+              ),
+              alignment: Alignment.center,
+              child: IconTheme(
+                data: const IconThemeData(color: AppThemeColors.textPrimary),
+                child: icon,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Semantics(
       button: true,
@@ -461,20 +509,14 @@ class _BannerIconButton extends StatelessWidget {
           height: buttonSize,
         ),
         style: IconButton.styleFrom(
-          backgroundColor: isPrimary && enabled
-              ? AppThemeColors.primary.withValues(alpha: 0.10)
-              : AppThemeColors.surfaceSunken,
+          backgroundColor: AppThemeColors.primary.withValues(alpha: 0.14),
           disabledBackgroundColor: AppThemeColors.surfaceSunken.withValues(
             alpha: 0.65,
           ),
-          foregroundColor: isPrimary
-              ? AppThemeColors.primary
-              : AppThemeColors.textSecondary,
+          foregroundColor: AppThemeColors.textPrimary,
           disabledForegroundColor: AppThemeColors.textDisabled,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(11.r),
-          ),
+          shape: const CircleBorder(),
         ),
         icon: icon,
       ),
