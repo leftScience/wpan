@@ -139,7 +139,6 @@ declare -a ABI_OUTPUTS=()
 BUILD_ARGS=(
   apk
   --release
-  --android-skip-build-dependency-validation
   --target-platform="$APK_TARGET_PLATFORM"
   --dart-define=APP_ENV="$APP_ENV"
   --build-name="$BUILD_NAME"
