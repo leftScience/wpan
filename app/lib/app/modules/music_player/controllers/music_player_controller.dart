@@ -60,6 +60,8 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   final actionsReady = false.obs;
   final volume = 1.0.obs;
   final isLoadingPlaylist = false.obs;
+  final playbackSpeed = 1.0.obs;
+  final favoritePaths = <String>{}.obs;
 
   int _initialIndex = 0;
   Duration? _pendingSeek;
@@ -877,6 +879,7 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
         .toList(growable: false);
     await _player.open(Playlist(medias, index: safeIndex), play: false);
     await _player.setVolume(volume.value * 100);
+    await _player.setRate(playbackSpeed.value);
     _playlistLoaded = true;
     return true;
   }
@@ -1092,6 +1095,44 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       await _player.seek(value);
       _syncAudioPlaybackState();
     } catch (_) {}
+  }
+
+  Future<void> seekRelative(Duration offset) async {
+    final total = duration.value;
+    final target = position.value + offset;
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : (total > Duration.zero && target > total ? total : target);
+    await seekTo(clamped);
+  }
+
+  Future<void> setPlaybackSpeed(double speed) async {
+    final safe = speed.clamp(0.5, 3.0);
+    playbackSpeed.value = safe;
+    try {
+      await _player.setRate(safe);
+      _syncAudioPlaybackState();
+    } catch (_) {}
+  }
+
+  bool isTrackFavorite(MusicTrack? track) {
+    if (track == null) return false;
+    final key = track.path.trim().isNotEmpty ? track.path.trim() : track.url.trim();
+    if (key.isEmpty) return false;
+    return favoritePaths.contains(key);
+  }
+
+  void toggleCurrentFavorite() {
+    final track = currentTrack;
+    if (track == null) return;
+    final key = track.path.trim().isNotEmpty ? track.path.trim() : track.url.trim();
+    if (key.isEmpty) return;
+    if (favoritePaths.contains(key)) {
+      favoritePaths.remove(key);
+    } else {
+      favoritePaths.add(key);
+    }
+    favoritePaths.refresh();
   }
 
   Future<void> stop() async {
