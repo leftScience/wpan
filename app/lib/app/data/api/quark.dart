@@ -83,6 +83,7 @@ class WebdavApi {
     int? page,
     int? size,
     String? sortType,
+    bool showErrorToast = true,
   }) {
     final app = applicationType.trim();
     final folder = path.trim().isEmpty ? '/' : path.trim();
@@ -103,6 +104,7 @@ class WebdavApi {
     return _httpClient.post<List<WebdavFileEntry>>(
       'quarkFs/$app/files/list',
       data: payload,
+      showErrorToast: showErrorToast,
       decoder: (data) {
         if (data is! List) {
           throw ApiException('Invalid quark list response');

@@ -87,8 +87,6 @@ class PlayerController extends GetxController {
   final VideoCastService _castService = Get.find<VideoCastService>();
   final RxDouble videoAspectRatio = (16 / 9).obs;
   final RxBool isPortraitVideo = false.obs;
-  final Rxn<Duration> scrubPreview = Rxn<Duration>();
-  final RxBool isScrubbing = false.obs;
   final RxDouble playbackRate = 1.0.obs;
   final RxBool isFullscreen = false.obs;
   final RxBool isSpeedBoosting = false.obs;
@@ -151,17 +149,15 @@ class PlayerController extends GetxController {
   final RxInt flutterHdrShaderMode = _hdrShaderModeOff.obs;
   ui.FragmentProgram? _doviFragmentProgram;
   String? _activeGlslShaderFilePath;
-  String? _last302TargetUrl;
-  String? _last302ErrorMessage;
-
-  String _describe302Target() {
-    final message = _last302ErrorMessage;
-    if (message != null && message.isNotEmpty) return message;
-    final target = _last302TargetUrl;
-    if (target == null || target.isEmpty) return '未获取到直链';
-    final short = target.length > 80 ? target.substring(0, 80) : target;
-    return '直链：$short';
-  }
+  static final Dio _redirectDio = Dio(
+    BaseOptions(
+      followRedirects: false,
+      validateStatus: (_) => true,
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+      sendTimeout: const Duration(seconds: 10),
+    ),
+  );
 
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<bool>? _completedSubscription;
@@ -175,15 +171,9 @@ class PlayerController extends GetxController {
   String? _folderPath;
   String? _resumeEpisodePath;
   Duration? _resumePosition;
-  Timer? _scrubTimer;
-  double _scrubViewWidth = 0;
-  double _scrubDeltaDx = 0;
-  Duration _scrubStartPos = Duration.zero;
-  Duration _scrubDuration = Duration.zero;
   bool _ready = false;
   String? _lastArgsKey;
   String _applicationType;
-  bool _playerConfigured = false;
   double? _rateBeforeBoost;
   bool _skipSettingsLoaded = false;
   String? _skipFolderKey;
@@ -279,12 +269,6 @@ class PlayerController extends GetxController {
     return '默认';
   }
 
-  String get currentAudioTrackDisplaySubtitle {
-    final track = currentAudioTrack.value;
-    if (track == null) return '';
-    return audioTrackSubtitle(track);
-  }
-
   List<SubtitleTrack> get subtitleTrackOptions {
     final visible = <SubtitleTrack>[];
     var hasAuto = false;
@@ -347,12 +331,6 @@ class PlayerController extends GetxController {
       return subtitleTrackTitle(options.first);
     }
     return '默认';
-  }
-
-  String get currentSubtitleTrackDisplaySubtitle {
-    final track = currentSubtitleTrack.value;
-    if (track == null) return '';
-    return subtitleTrackSubtitle(track);
   }
 
   String? get currentCastUrl {
@@ -445,7 +423,6 @@ class PlayerController extends GetxController {
 
   Future<void> _startInitialPlayback() async {
     await _ensureGlobalPlaybackProxyModeLoaded();
-    await _configurePlayerIfNeeded();
     if (isCasting) {
       await stopPlayback();
       return;
@@ -453,11 +430,6 @@ class PlayerController extends GetxController {
     if (episodes.isNotEmpty && !_blockPlaybackOnOpen) {
       await playAt(_initialIndex);
     }
-  }
-
-  Future<void> _configurePlayerIfNeeded() async {
-    if (_playerConfigured) return;
-    _playerConfigured = true;
   }
 
   /// 打开视频前显式激活音频会话，避免被音乐播放器的 deactivate 影响。
@@ -487,9 +459,17 @@ class PlayerController extends GetxController {
     if (_shouldLoadCollectionOnEnter(args)) {
       await _loadEpisodesOnEnter(args, version);
     } else if (_hasExplicitInitialTarget(args)) {
-      await _resolveExplicitPlaybackTarget(args, version);
+      await _resolveInitialPlaybackTarget(
+        args,
+        version,
+        readStoredProgress: false,
+      );
     } else if (!_hasExplicitResumeTarget()) {
-      await _restorePlaybackTargetFromStorage(version);
+      await _resolveInitialPlaybackTarget(
+        args,
+        version,
+        readStoredProgress: true,
+      );
     }
     if (_routeArgsVersion != version) return;
     if (_ready && episodes.isNotEmpty && !_blockPlaybackOnOpen) {
@@ -498,23 +478,17 @@ class PlayerController extends GetxController {
   }
 
   String _argsKey(Map args) {
-    int parseInt(dynamic value) {
-      if (value is int) return value;
-      if (value is String) return int.tryParse(value) ?? 0;
-      return 0;
-    }
-
     final app = (args['applicationType'] as String?)?.trim() ?? '';
     final folder = (args['folderPath'] as String?)?.trim() ?? '';
     final title = (args['title'] as String?)?.trim() ?? '';
     final rawEpisodes = args['episodes'];
     final count = rawEpisodes is List ? rawEpisodes.length : 0;
-    final initialIndex = parseInt(args['initialIndex']);
+    final initialIndex = _toInt(args['initialIndex']) ?? 0;
     final preferredPath =
         (args[PlaybackEntryConfig.preferredItemPathKey] as String?)?.trim() ??
         '';
     final resume = (args['resumeEpisodePath'] as String?)?.trim() ?? '';
-    final resumePositionMs = parseInt(args['resumePositionMs']);
+    final resumePositionMs = _toInt(args['resumePositionMs']) ?? 0;
     final loadOnEnter =
         args[PlaybackEntryConfig.loadCollectionOnEnterKey] == true ? '1' : '0';
     return '$app|$folder|$title|$count|$initialIndex|$preferredPath|$resume|$resumePositionMs|$loadOnEnter';
@@ -552,11 +526,6 @@ class PlayerController extends GetxController {
       unawaited(_playerPreferencesStorage.saveDecodeMode('sw'));
       unawaited(_applyMpvDecodeMode());
       unawaited(_restartCurrentEpisode());
-      Get.snackbar(
-        '视频解码失败',
-        '${error.trim()}\n（已自动切换到软解）',
-        duration: const Duration(seconds: 8),
-      );
       return;
     }
     if (_proxyModeFallbackApplied) return;
@@ -565,11 +534,6 @@ class PlayerController extends GetxController {
     _preferredPlaybackProxyMode = 'native_proxy';
     unawaited(_playerPreferencesStorage.saveProxyMode('native_proxy'));
     unawaited(_restartCurrentEpisode());
-    Get.snackbar(
-      '302 播放失败',
-      '${error.trim()}\n${_describe302Target()}（已切换到本地代理）',
-      duration: const Duration(seconds: 8),
-    );
   }
 
   Future<void> _applyPreferredPlaybackRate() async {
@@ -803,11 +767,6 @@ class PlayerController extends GetxController {
     if (previousHdrMode != _hdrShaderModeOff) {
       unawaited(_enterHdrShaderMode(previousHdrMode));
     }
-    Get.snackbar(
-      '播放器兼容模式',
-      '当前设备无法使用 GPU 渲染，已切换到 MediaCodec 输出',
-      duration: const Duration(seconds: 5),
-    );
   }
 
   /// Dolby Vision Profile 5（bl_signal_compatibility_id=0）的基础层是杜比私有 IPTPQc2，
@@ -840,10 +799,7 @@ class PlayerController extends GetxController {
     }
   }
 
-  static const String _doviP5GlslShader = r'''//!HOOK MAIN
-//!BIND HOOKED
-//!DESC Dolby Vision Profile 5 (IPTPQc2 -> BT.709 SDR)
-
+  static const String _glslPqEotf = r'''
 vec3 pq_eotf(vec3 n) {
     n = clamp(n, 0.0, 1.0);
     vec3 np = pow(n, vec3(1.0 / 78.84375));
@@ -851,7 +807,19 @@ vec3 pq_eotf(vec3 n) {
     vec3 den = 18.8515625 - 18.6875 * np;
     return pow(num / max(den, 1e-6), vec3(1.0 / 0.1593017578125));
 }
+''';
 
+  static const String _glslBt2020ToBt709 = r'''
+vec3 bt2020_to_bt709(vec3 c) {
+    return vec3(
+         1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
+        -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
+        -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b
+    );
+}
+''';
+
+  static const String _glslToneMapAndFinish = r'''
 vec3 hable_Curve(vec3 x) {
     return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
 }
@@ -871,7 +839,16 @@ vec3 tone_map_and_finish(vec3 rgb) {
     rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
     return pow(rgb, vec3(1.0 / 2.2));
 }
+''';
 
+  static const String _doviP5GlslShader =
+      r'''//!HOOK MAIN
+//!BIND HOOKED
+//!DESC Dolby Vision Profile 5 (IPTPQc2 -> BT.709 SDR)
+''' +
+      _glslPqEotf +
+      _glslToneMapAndFinish +
+      r'''
 vec4 hook() {
     vec4 color = HOOKED_tex(HOOKED_pos);
     // mpv 默认把未识别的流按 BT.709 矩阵转成了 RGB：
@@ -920,46 +897,15 @@ vec4 hook() {
 }
 ''';
 
-  static const String _hdrPqGlslShader = r'''//!HOOK MAIN
+  static const String _hdrPqGlslShader =
+      r'''//!HOOK MAIN
 //!BIND HOOKED
 //!DESC HDR10 / HDR Vivid PQ (BT.2020 PQ -> BT.709 SDR)
-
-vec3 pq_eotf(vec3 n) {
-    n = clamp(n, 0.0, 1.0);
-    vec3 np = pow(n, vec3(1.0 / 78.84375));
-    vec3 num = max(np - 0.8359375, 0.0);
-    vec3 den = 18.8515625 - 18.6875 * np;
-    return pow(num / max(den, 1e-6), vec3(1.0 / 0.1593017578125));
-}
-
-vec3 bt2020_to_bt709(vec3 c) {
-    return vec3(
-         1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
-        -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
-        -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b
-    );
-}
-
-vec3 hable_Curve(vec3 x) {
-    return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
-}
-
-vec3 tone_map_and_finish(vec3 rgb) {
-    rgb = max(rgb, 0.0);
-    float peak = max(rgb.r, max(rgb.g, rgb.b));
-    if (peak > 1e-6) {
-        float mapped_peak = hable_Curve(vec3(peak * 2.2)).x / hable_Curve(vec3(6.0)).x;
-        mapped_peak = clamp(mapped_peak, 0.0, 1.0);
-        rgb *= (mapped_peak / peak);
-    }
-    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-    float hi = clamp((peak - 1.2) / 3.0, 0.0, 1.0) * 0.35;
-    rgb = mix(rgb, vec3(luma), hi);
-    luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-    rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
-    return pow(rgb, vec3(1.0 / 2.2));
-}
-
+''' +
+      _glslPqEotf +
+      _glslBt2020ToBt709 +
+      _glslToneMapAndFinish +
+      r'''
 vec4 hook() {
     vec4 color = HOOKED_tex(HOOKED_pos);
     vec3 linear2020 = pq_eotf(color.rgb);
@@ -969,7 +915,8 @@ vec4 hook() {
 }
 ''';
 
-  static const String _hdrHlgGlslShader = r'''//!HOOK MAIN
+  static const String _hdrHlgGlslShader =
+      r'''//!HOOK MAIN
 //!BIND HOOKED
 //!DESC HDR HLG (BT.2020 HLG -> BT.709 SDR)
 
@@ -988,35 +935,10 @@ vec3 hlg_eotf(vec3 e) {
     float ys = max(dot(scene, vec3(0.2627, 0.6780, 0.0593)), 1e-6);
     return scene * pow(ys, 0.2);
 }
-
-vec3 bt2020_to_bt709(vec3 c) {
-    return vec3(
-         1.660491 * c.r - 0.587641 * c.g - 0.072850 * c.b,
-        -0.124550 * c.r + 1.132900 * c.g - 0.008349 * c.b,
-        -0.018151 * c.r - 0.100579 * c.g + 1.118730 * c.b
-    );
-}
-
-vec3 hable_Curve(vec3 x) {
-    return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - (0.004 / 0.06);
-}
-
-vec3 tone_map_and_finish(vec3 rgb) {
-    rgb = max(rgb, 0.0);
-    float peak = max(rgb.r, max(rgb.g, rgb.b));
-    if (peak > 1e-6) {
-        float mapped_peak = hable_Curve(vec3(peak * 2.2)).x / hable_Curve(vec3(6.0)).x;
-        mapped_peak = clamp(mapped_peak, 0.0, 1.0);
-        rgb *= (mapped_peak / peak);
-    }
-    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-    float hi = clamp((peak - 1.2) / 3.0, 0.0, 1.0) * 0.35;
-    rgb = mix(rgb, vec3(luma), hi);
-    luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-    rgb = clamp(mix(vec3(luma), rgb, 1.18), 0.0, 1.0);
-    return pow(rgb, vec3(1.0 / 2.2));
-}
-
+''' +
+      _glslBt2020ToBt709 +
+      _glslToneMapAndFinish +
+      r'''
 vec4 hook() {
     vec4 color = HOOKED_tex(HOOKED_pos);
     vec3 linear2020 = hlg_eotf(color.rgb);
@@ -1259,15 +1181,18 @@ vec4 hook() {
   }
 
   Future<void> _persistPlaybackSnapshot() async {
-    final folder = _folderPath;
-    final episodePath = _currentEpisodePath;
-    if (folder == null || folder.isEmpty) return;
-    if (episodePath == null || episodePath.isEmpty) return;
-
     final position = player.state.position;
     // A pause fired before the first frame would otherwise overwrite an
     // existing resume point with zero.
     if (position <= Duration.zero) return;
+    await _saveProgressAt(position);
+  }
+
+  Future<void> _saveProgressAt(Duration position) async {
+    final folder = _folderPath;
+    final episodePath = _currentEpisodePath;
+    if (folder == null || folder.isEmpty) return;
+    if (episodePath == null || episodePath.isEmpty) return;
 
     final current = _currentEpisode;
     final rawTitle = (current?.title ?? '').trim();
@@ -1314,12 +1239,6 @@ vec4 hook() {
       return List<int>.generate(count, (i) => i, growable: false);
     }
     return List<int>.generate(count, (i) => count - 1 - i, growable: false);
-  }
-
-  void onManualNext() {
-    final next = currentIndex.value + 1;
-    if (next >= episodes.length) return;
-    currentIndex.value = next;
   }
 
   Future<void> playNextEpisode() => playAt(currentIndex.value + 1);
@@ -1669,52 +1588,6 @@ vec4 hook() {
     _skipSettingsLoaded = true;
   }
 
-  void beginScrub({required double viewWidth}) {
-    if (viewWidth <= 0) return;
-    if (player.state.duration <= Duration.zero) return;
-    _scrubViewWidth = viewWidth;
-    _scrubDeltaDx = 0;
-    _scrubStartPos = player.state.position;
-    _scrubDuration = player.state.duration;
-    isScrubbing.value = true;
-    scrubPreview.value = _scrubStartPos;
-  }
-
-  void updateScrub(double deltaDx) {
-    if (!isScrubbing.value) return;
-    if (_scrubViewWidth <= 0) return;
-    final durationMs = _scrubDuration.inMilliseconds;
-    if (durationMs <= 0) return;
-
-    _scrubDeltaDx += deltaDx;
-    final offsetMs = (_scrubDeltaDx / _scrubViewWidth) * durationMs;
-    final targetMs = (_scrubStartPos.inMilliseconds + offsetMs.round()).clamp(
-      0,
-      durationMs,
-    );
-    final target = Duration(milliseconds: targetMs);
-    scrubPreview.value = target;
-
-    _scrubTimer?.cancel();
-    _scrubTimer = Timer(const Duration(milliseconds: 90), () {
-      unawaited(player.seek(Duration(milliseconds: targetMs)));
-    });
-  }
-
-  void endScrub() {
-    if (!isScrubbing.value) return;
-    _scrubTimer?.cancel();
-    _scrubTimer = null;
-    final preview = scrubPreview.value;
-    final durationMs = player.state.duration.inMilliseconds;
-    if (preview != null && durationMs > 0) {
-      final targetMs = preview.inMilliseconds.clamp(0, durationMs);
-      unawaited(player.seek(Duration(milliseconds: targetMs)));
-    }
-    isScrubbing.value = false;
-    scrubPreview.value = null;
-  }
-
   Future<void> onVideoEnd() async {
     if (_autoNextRunning) return;
     _autoNextRunning = true;
@@ -1729,7 +1602,8 @@ vec4 hook() {
   /// When the user picks 302/redirect the player connects to Quark directly, so
   /// the request has to carry the same UA and Referer the server uses.
   Media _mediaForUrl(String url) {
-    if (effectivePlaybackProxyMode != '302_redirect') {
+    if (_isLocalProxyStreamUrl(url) ||
+        effectivePlaybackProxyMode != '302_redirect') {
       return Media(url);
     }
     return Media(url, httpHeaders: playbackHttpHeaders);
@@ -1738,38 +1612,18 @@ vec4 hook() {
   /// In 302 mode the player must talk to Quark itself, but ffmpeg drops custom
   /// headers across redirects. Resolve the server's 302 first and hand ffmpeg
   /// the final Quark URL so the TV UA/Referer reach Quark.
+  /// If 302 resolution fails, seamlessly fall back to native_proxy for this request.
   Future<String> _resolve302TargetIfNeeded(String url) async {
     if (effectivePlaybackProxyMode != '302_redirect') return url;
     if (!_isLocalProxyStreamUrl(url)) return url;
     try {
-      final dio = Dio(
-        BaseOptions(
-          followRedirects: false,
-          validateStatus: (_) => true,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
-          sendTimeout: const Duration(seconds: 10),
-        ),
-      );
-      final response = await dio.get<dynamic>(url);
-      final payload = response.data;
-      if (payload is Map) {
-        final code = payload['code'];
-        final message = (payload['msg'] ?? '').toString().trim();
-        if (message.isNotEmpty && code != 200 && code != '200') {
-          _last302ErrorMessage = message;
-        }
-      }
-      final location = response.headers.value('location');
-      if (location != null && location.trim().isNotEmpty) {
-        final resolved = location.trim();
-        _last302TargetUrl = resolved;
-        _last302ErrorMessage = null;
-        return resolved;
+      final response = await _redirectDio.get<dynamic>(url);
+      final location = response.headers.value('location')?.trim();
+      if (location != null && location.isNotEmpty) {
+        return location;
       }
     } catch (_) {}
-    _last302TargetUrl = null;
-    return url;
+    return _applyPlaybackProxyModeToUrl(url, mode: _defaultPlaybackProxyMode);
   }
 
   Future<void> playAt(
@@ -2070,6 +1924,7 @@ vec4 hook() {
       final files = await _webdavApi.fetchFileList(
         applicationType: _applicationType,
         path: folder,
+        showErrorToast: false,
       );
       if (_routeArgsVersion != version) return;
       _folderEntries = List<WebdavFileEntry>.unmodifiable(files);
@@ -2079,7 +1934,11 @@ vec4 hook() {
       if (nextEpisodes.isEmpty) return;
 
       resourceIntro.value = '共 ${nextEpisodes.length} 集';
-      await _resolveInitialPlaybackTarget(args, version);
+      await _resolveInitialPlaybackTarget(
+        args,
+        version,
+        readStoredProgress: true,
+      );
     } catch (error) {
       if (_routeArgsVersion != version) return;
       Get.snackbar(
@@ -2093,8 +1952,13 @@ vec4 hook() {
     }
   }
 
-  Future<void> _resolveExplicitPlaybackTarget(Map args, int version) async {
+  Future<void> _resolveInitialPlaybackTarget(
+    Map args,
+    int version, {
+    required bool readStoredProgress,
+  }) async {
     if (episodes.isEmpty) return;
+    final folder = _folderPath ?? '';
 
     final preferredPath = MediaPath.normalize(
       args[PlaybackEntryConfig.preferredItemPathKey] as String?,
@@ -2104,73 +1968,21 @@ vec4 hook() {
     );
     final explicitResumePositionMs = _toInt(args['resumePositionMs']);
 
-    var initialPath = '';
-    var resumePath = '';
-    int? resumePositionMs;
-    var source = _InitialEpisodeSource.none;
-
-    if (preferredPath.isNotEmpty) {
-      initialPath = preferredPath;
-      source = _InitialEpisodeSource.preferred;
-      if (explicitResumePath.isNotEmpty &&
-          MediaPath.equals(explicitResumePath, preferredPath)) {
-        resumePath = explicitResumePath;
-        resumePositionMs = explicitResumePositionMs;
-      }
-    } else if (explicitResumePath.isNotEmpty) {
-      initialPath = explicitResumePath;
-      resumePath = explicitResumePath;
-      resumePositionMs = explicitResumePositionMs;
-      source = _InitialEpisodeSource.explicitResume;
-    }
-
-    if (initialPath.isEmpty) return;
-
-    final matchedIndex = _episodeIndexByPath(initialPath);
-    if (matchedIndex < 0) {
-      await _handleMissingInitialEpisode(
-        folder: _folderPath ?? '',
-        source: source,
-        targetPath: initialPath,
-      );
+    String storedResumePath = '';
+    int? storedResumePositionMs;
+    if (readStoredProgress && folder.isNotEmpty) {
+      PlaybackProgress? progress;
+      try {
+        progress = await _progressStorage.readProgress(folder);
+      } catch (_) {}
       if (_routeArgsVersion != version) return;
-      return;
+
+      storedResumePath = MediaPath.normalize(progress?.buildItemPath(folder));
+      storedResumePositionMs =
+          progress != null && progress.position > Duration.zero
+          ? progress.position.inMilliseconds
+          : null;
     }
-
-    _initialIndex = matchedIndex;
-    currentIndex.value = matchedIndex;
-    _resumeEpisodePath = resumePath.isNotEmpty ? resumePath : null;
-    _resumePosition = resumePositionMs != null && resumePositionMs > 0
-        ? Duration(milliseconds: resumePositionMs)
-        : null;
-  }
-
-  Future<void> _resolveInitialPlaybackTarget(Map args, int version) async {
-    final folder = _folderPath;
-    if (folder == null || folder.isEmpty) return;
-    if (episodes.isEmpty) return;
-
-    final preferredPath = MediaPath.normalize(
-      args[PlaybackEntryConfig.preferredItemPathKey] as String?,
-    );
-    final explicitResumePath = MediaPath.normalize(
-      args['resumeEpisodePath'] as String?,
-    );
-    final explicitResumePositionMs = _toInt(args['resumePositionMs']);
-
-    PlaybackProgress? progress;
-    try {
-      progress = await _progressStorage.readProgress(folder);
-    } catch (_) {}
-    if (_routeArgsVersion != version) return;
-
-    final storedResumePath = MediaPath.normalize(
-      progress?.buildItemPath(folder),
-    );
-    final storedResumePositionMs =
-        progress != null && progress.position > Duration.zero
-        ? progress.position.inMilliseconds
-        : null;
 
     var initialPath = '';
     var resumePath = '';
@@ -2201,7 +2013,9 @@ vec4 hook() {
       source = _InitialEpisodeSource.storedResume;
     }
 
-    var initialIndex = 0;
+    if (initialPath.isEmpty && !readStoredProgress) return;
+
+    var initialIndex = _initialIndex;
     if (initialPath.isNotEmpty) {
       final matchedIndex = _episodeIndexByPath(initialPath);
       if (matchedIndex >= 0) {
@@ -2210,12 +2024,9 @@ vec4 hook() {
         final shouldContinue = await _handleMissingInitialEpisode(
           folder: folder,
           source: source,
-          targetPath: initialPath,
         );
-        if (_routeArgsVersion != version) return;
-        if (!shouldContinue) {
-          return;
-        }
+        if (_routeArgsVersion != version || !shouldContinue) return;
+        initialIndex = 0;
         resumePath = '';
         resumePositionMs = null;
       }
@@ -2229,32 +2040,6 @@ vec4 hook() {
         : null;
   }
 
-  Future<void> _restorePlaybackTargetFromStorage(int version) async {
-    final folder = _folderPath;
-    if (folder == null || folder.isEmpty) return;
-    if (episodes.isEmpty) return;
-
-    try {
-      final progress = await _progressStorage.readProgress(folder);
-      if (_routeArgsVersion != version || progress == null) return;
-
-      final resumePath = MediaPath.normalize(progress.buildItemPath(folder));
-      if (resumePath.isEmpty) return;
-
-      final index = _episodeIndexByPath(resumePath);
-      if (index < 0) {
-        await _progressStorage.clearProgress(folder);
-        return;
-      }
-
-      _initialIndex = index;
-      _resumeEpisodePath = resumePath;
-      _resumePosition = progress.position > Duration.zero
-          ? progress.position
-          : null;
-    } catch (_) {}
-  }
-
   bool _hasExplicitResumeTarget() {
     final resumePath = MediaPath.normalize(_resumeEpisodePath);
     if (resumePath.isNotEmpty) {
@@ -2266,18 +2051,17 @@ vec4 hook() {
   Future<bool> _handleMissingInitialEpisode({
     required String folder,
     required _InitialEpisodeSource source,
-    required String targetPath,
   }) async {
-    if (source == _InitialEpisodeSource.storedResume) {
+    if (source == _InitialEpisodeSource.storedResume && folder.isNotEmpty) {
       await _progressStorage.clearProgress(folder);
-      _resumeEpisodePath = null;
-      _resumePosition = null;
-      return true;
     }
-
-    _blockPlaybackOnOpen = true;
     _resumeEpisodePath = null;
     _resumePosition = null;
+    // 只要播放列表不为空（能够播放），就静默回退到第 1 集，不弹窗阻断播放。
+    if (episodes.isNotEmpty) {
+      return true;
+    }
+    _blockPlaybackOnOpen = true;
     Get.snackbar('提示', '目标视频不存在，请刷新记录后重试');
     return false;
   }
@@ -2466,8 +2250,7 @@ vec4 hook() {
 
     if (!_outroSkipTriggered &&
         skipOutro.value > Duration.zero &&
-        player.state.playing &&
-        !isScrubbing.value) {
+        player.state.playing) {
       final duration = player.state.duration;
       if (duration > Duration.zero) {
         final remaining = duration - position;
@@ -2484,19 +2267,7 @@ vec4 hook() {
       return;
     }
     _lastPersistedPosition = position;
-    final currentEpisode = _currentEpisode;
-    final currentTitle = (currentEpisode?.title ?? '').trim();
-    final title = currentTitle.isNotEmpty
-        ? currentTitle
-        : _titleFromPath(episodePath);
-    unawaited(
-      _progressStorage.saveProgress(
-        folderPath: folder,
-        itemTitle: title,
-        itemPath: episodePath,
-        position: position,
-      ),
-    );
+    unawaited(_saveProgressAt(position));
   }
 
   void _startCastProgressPolling() {
@@ -2513,10 +2284,8 @@ vec4 hook() {
 
   Future<void> _persistCastProgressSnapshot() async {
     if (!isCasting) return;
-    final folder = _folderPath;
-    final episodePath = _currentEpisodePath;
-    if (folder == null || folder.isEmpty) return;
-    if (episodePath == null || episodePath.isEmpty) return;
+    if (_folderPath == null || _folderPath!.isEmpty) return;
+    if (_currentEpisodePath == null || _currentEpisodePath!.isEmpty) return;
 
     final position = await _castService.currentPosition();
     if (position == null || position < Duration.zero) return;
@@ -2526,18 +2295,7 @@ vec4 hook() {
       return;
     }
     _lastCastPersistedPosition = position;
-
-    final currentEpisode = _currentEpisode;
-    final currentTitle = (currentEpisode?.title ?? '').trim();
-    final title = currentTitle.isNotEmpty
-        ? currentTitle
-        : _titleFromPath(episodePath);
-    await _progressStorage.saveProgress(
-      folderPath: folder,
-      itemTitle: title,
-      itemPath: episodePath,
-      position: position,
-    );
+    await _saveProgressAt(position);
   }
 
   Future<void> _loadGlobalPlaybackProxyMode() async {
@@ -2769,6 +2527,7 @@ vec4 hook() {
       final files = await _webdavApi.fetchFileList(
         applicationType: _applicationType,
         path: folder,
+        showErrorToast: false,
       );
       _folderEntries = List<WebdavFileEntry>.unmodifiable(files);
     } catch (_) {
@@ -2933,7 +2692,6 @@ vec4 hook() {
     _videoParamsSubscription?.cancel();
     _trackSubscription?.cancel();
     _tracksSubscription?.cancel();
-    _scrubTimer?.cancel();
     _castProgressTimer?.cancel();
     _voFallbackTimer?.cancel();
     unawaited(_audioSession.dispose());

@@ -367,9 +367,17 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     if (_shouldLoadCollectionOnEnter(arguments)) {
       await _loadTracksOnEnter(arguments, version);
     } else if (_hasExplicitInitialTarget(arguments)) {
-      await _resolveExplicitPlaybackTarget(arguments, version);
+      await _resolveInitialPlaybackTarget(
+        arguments,
+        version,
+        readStoredProgress: false,
+      );
     } else if (!_hasExplicitResumeTarget()) {
-      await _restorePlaybackTargetFromStorage(version);
+      await _resolveInitialPlaybackTarget(
+        arguments,
+        version,
+        readStoredProgress: true,
+      );
     }
     if (_routeArgsVersion != version) return;
 
@@ -520,6 +528,7 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       final files = await _webdavApi.fetchFileList(
         applicationType: _applicationType,
         path: folder,
+        showErrorToast: false,
       );
       if (_routeArgsVersion != version) return;
 
@@ -530,7 +539,11 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       _syncAudioQueue();
       _syncAudioMediaItem();
       _syncAudioPlaybackState();
-      await _resolveInitialPlaybackTarget(arguments, version);
+      await _resolveInitialPlaybackTarget(
+        arguments,
+        version,
+        readStoredProgress: true,
+      );
     } catch (error) {
       if (_routeArgsVersion != version) return;
       Get.snackbar(
@@ -544,11 +557,13 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _resolveExplicitPlaybackTarget(
+  Future<void> _resolveInitialPlaybackTarget(
     Map arguments,
-    int version,
-  ) async {
+    int version, {
+    required bool readStoredProgress,
+  }) async {
     if (tracks.isEmpty) return;
+    final folder = _folderKey ?? '';
 
     final preferredPath = MediaPath.normalize(
       arguments[PlaybackEntryConfig.preferredItemPathKey] as String?,
@@ -558,77 +573,21 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     );
     final explicitResumePositionMs = _toInt(arguments['resumePositionMs']);
 
-    var initialPath = '';
-    var resumePath = '';
-    int? resumePositionMs;
-    var source = _InitialTrackSource.none;
-
-    if (preferredPath.isNotEmpty) {
-      initialPath = preferredPath;
-      source = _InitialTrackSource.preferred;
-      if (explicitResumePath.isNotEmpty &&
-          MediaPath.equals(explicitResumePath, preferredPath)) {
-        resumePath = explicitResumePath;
-        resumePositionMs = explicitResumePositionMs;
-      }
-    } else if (explicitResumePath.isNotEmpty) {
-      initialPath = explicitResumePath;
-      resumePath = explicitResumePath;
-      resumePositionMs = explicitResumePositionMs;
-      source = _InitialTrackSource.explicitResume;
-    }
-
-    if (initialPath.isEmpty) return;
-
-    final matchedIndex = _indexForTrackPath(initialPath);
-    if (matchedIndex < 0) {
-      await _handleMissingInitialTrack(
-        folder: _folderKey ?? '',
-        source: source,
-        targetPath: initialPath,
-      );
+    String storedResumePath = '';
+    int? storedResumePositionMs;
+    if (readStoredProgress && folder.isNotEmpty) {
+      PlaybackProgress? progress;
+      try {
+        progress = await _progressStorage.readProgress(folder);
+      } catch (_) {}
       if (_routeArgsVersion != version) return;
-      return;
+
+      storedResumePath = MediaPath.normalize(progress?.buildItemPath(folder));
+      storedResumePositionMs =
+          progress != null && progress.position > Duration.zero
+          ? progress.position.inMilliseconds
+          : null;
     }
-
-    _initialIndex = matchedIndex;
-    currentIndex.value = matchedIndex;
-    final selectedPath = tracks[matchedIndex].path.trim();
-    _currentTrackPath = selectedPath.isEmpty ? null : selectedPath;
-    _resumeTrackPath = resumePath.isNotEmpty ? resumePath : null;
-    _resumePosition = resumePositionMs != null && resumePositionMs > 0
-        ? Duration(milliseconds: resumePositionMs)
-        : null;
-    _syncAudioMediaItem();
-    _syncAudioPlaybackState();
-  }
-
-  Future<void> _resolveInitialPlaybackTarget(Map arguments, int version) async {
-    final folder = _folderKey;
-    if (folder == null || folder.isEmpty) return;
-    if (tracks.isEmpty) return;
-
-    final preferredPath = MediaPath.normalize(
-      arguments[PlaybackEntryConfig.preferredItemPathKey] as String?,
-    );
-    final explicitResumePath = MediaPath.normalize(
-      arguments['resumeTrackPath'] as String?,
-    );
-    final explicitResumePositionMs = _toInt(arguments['resumePositionMs']);
-
-    PlaybackProgress? progress;
-    try {
-      progress = await _progressStorage.readProgress(folder);
-    } catch (_) {}
-    if (_routeArgsVersion != version) return;
-
-    final storedResumePath = MediaPath.normalize(
-      progress?.buildItemPath(folder),
-    );
-    final storedResumePositionMs =
-        progress != null && progress.position > Duration.zero
-        ? progress.position.inMilliseconds
-        : null;
 
     var initialPath = '';
     var resumePath = '';
@@ -659,7 +618,9 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       source = _InitialTrackSource.storedResume;
     }
 
-    var initialIndex = 0;
+    if (initialPath.isEmpty && !readStoredProgress) return;
+
+    var initialIndex = _initialIndex;
     if (initialPath.isNotEmpty) {
       final matchedIndex = _indexForTrackPath(initialPath);
       if (matchedIndex >= 0) {
@@ -668,12 +629,9 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
         final shouldContinue = await _handleMissingInitialTrack(
           folder: folder,
           source: source,
-          targetPath: initialPath,
         );
-        if (_routeArgsVersion != version) return;
-        if (!shouldContinue) {
-          return;
-        }
+        if (_routeArgsVersion != version || !shouldContinue) return;
+        initialIndex = 0;
         resumePath = '';
         resumePositionMs = null;
       }
@@ -691,33 +649,6 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     _syncAudioPlaybackState();
   }
 
-  Future<void> _restorePlaybackTargetFromStorage(int version) async {
-    final folder = _folderKey;
-    if (folder == null || folder.isEmpty) return;
-    if (tracks.isEmpty) return;
-
-    try {
-      final progress = await _progressStorage.readProgress(folder);
-      if (_routeArgsVersion != version || progress == null) return;
-
-      final resumePath = MediaPath.normalize(progress.buildItemPath(folder));
-      if (resumePath.isEmpty) return;
-
-      final index = _indexForTrackPath(resumePath);
-      if (index < 0) {
-        await _progressStorage.clearProgress(folder);
-        return;
-      }
-
-      _initialIndex = index;
-      currentIndex.value = index;
-      _resumeTrackPath = resumePath;
-      _resumePosition = progress.position > Duration.zero
-          ? progress.position
-          : null;
-    } catch (_) {}
-  }
-
   bool _hasExplicitResumeTarget() {
     final resumePath = MediaPath.normalize(_resumeTrackPath);
     if (resumePath.isNotEmpty) {
@@ -729,18 +660,16 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   Future<bool> _handleMissingInitialTrack({
     required String folder,
     required _InitialTrackSource source,
-    required String targetPath,
   }) async {
-    if (source == _InitialTrackSource.storedResume) {
+    if (source == _InitialTrackSource.storedResume && folder.isNotEmpty) {
       await _progressStorage.clearProgress(folder);
-      _resumeTrackPath = null;
-      _resumePosition = null;
-      return true;
     }
-
-    _blockPlaybackOnOpen = true;
     _resumeTrackPath = null;
     _resumePosition = null;
+    if (tracks.isNotEmpty) {
+      return true;
+    }
+    _blockPlaybackOnOpen = true;
     Get.snackbar('提示', '目标音频不存在，请刷新记录后重试');
     return false;
   }

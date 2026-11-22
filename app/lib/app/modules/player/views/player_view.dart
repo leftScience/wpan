@@ -438,7 +438,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       _speedBoostActivated = true;
       unawaited(controller.startSpeedBoost(3.0));
     });
-    if (mounted) setState(() {});
   }
 
   void _onSpeedBoostPointerMove(VideoState state, PointerMoveEvent event) {
@@ -461,7 +460,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         _speedBoostTimer = null;
         _speedBoostPointer = null;
         _speedBoostStartPosition = null;
-        if (mounted) setState(() {});
         return;
       }
     }
@@ -470,19 +468,16 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     _speedBoostTimer = null;
     _speedBoostPointer = null;
     _speedBoostStartPosition = null;
-    if (mounted) setState(() {});
   }
 
   void _onSpeedBoostPointerUp(PointerUpEvent event) {
     if (_speedBoostPointer != event.pointer) return;
     _cancelSpeedBoost();
-    if (mounted) setState(() {});
   }
 
   void _onSpeedBoostPointerCancel(PointerCancelEvent event) {
     if (_speedBoostPointer != event.pointer) return;
     _cancelSpeedBoost();
-    if (mounted) setState(() {});
   }
 
   void _scrollToCurrentEpisode() {
@@ -1138,12 +1133,56 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     );
   }
 
+  void _showAdaptiveSettingSheet(
+    BuildContext context, {
+    required bool fullscreenDrawer,
+    required String title,
+    required String Function() subtitleBuilder,
+    required Widget Function(BuildContext ctx, {required bool compact})
+    bodyBuilder,
+  }) {
+    if (fullscreenDrawer) {
+      _showFullscreenSideDrawer(
+        context,
+        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
+          child: Obx(
+            () => _buildFullscreenDrawerSection(
+              title: title,
+              subtitle: subtitleBuilder(),
+              child: bodyBuilder(ctx, compact: true),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Obx(
+        () => _buildStandardBottomSheet(
+          context: ctx,
+          title: title,
+          subtitle: subtitleBuilder(),
+          child: bodyBuilder(ctx, compact: false),
+        ),
+      ),
+    );
+  }
+
   void _showPlaybackRateSheet(
     BuildContext context, {
     bool fullscreenDrawer = false,
   }) {
-    Widget buildBody(BuildContext ctx, {bool compact = false}) {
-      return Obx(() {
+    _showAdaptiveSettingSheet(
+      context,
+      fullscreenDrawer: fullscreenDrawer,
+      title: '倍速',
+      subtitleBuilder: () => '当前：${_formatRate(controller.playbackRate.value)}',
+      bodyBuilder: (ctx, {required compact}) => Obx(() {
         final currentRate = controller.playbackRate.value;
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -1165,46 +1204,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               })
               .toList(growable: false),
         );
-      });
-    }
-
-    Widget buildContent(BuildContext ctx) {
-      return Obx(() {
-        final currentRate = controller.playbackRate.value;
-        return _buildStandardBottomSheet(
-          context: ctx,
-          title: '倍速',
-          subtitle: '当前：${_formatRate(currentRate)}',
-          child: buildBody(ctx),
-        );
-      });
-    }
-
-    if (fullscreenDrawer) {
-      _showFullscreenSideDrawer(
-        context,
-        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
-          child: Obx(() {
-            final currentRate = controller.playbackRate.value;
-            return _buildFullscreenDrawerSection(
-              title: '倍速',
-              subtitle: '当前：${_formatRate(currentRate)}',
-              child: buildBody(ctx, compact: true),
-            );
-          }),
-        ),
-      );
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return buildContent(ctx);
-      },
+      }),
     );
   }
 
@@ -1217,8 +1217,12 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       return;
     }
 
-    Widget buildBody(BuildContext ctx, {bool compact = false}) {
-      return Obx(() {
+    _showAdaptiveSettingSheet(
+      context,
+      fullscreenDrawer: fullscreenDrawer,
+      title: '音轨',
+      subtitleBuilder: () => '当前：${controller.currentAudioTrackDisplayLabel}',
+      bodyBuilder: (ctx, {required compact}) => Obx(() {
         final options = controller.audioTrackOptions;
         final current = controller.currentAudioTrack.value;
         return Column(
@@ -1244,44 +1248,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               })
               .toList(growable: false),
         );
-      });
-    }
-
-    Widget buildContent(BuildContext ctx) {
-      return Obx(() {
-        final current = controller.currentAudioTrackDisplayLabel;
-        return _buildStandardBottomSheet(
-          context: ctx,
-          title: '音轨',
-          subtitle: '当前：$current',
-          child: buildBody(ctx),
-        );
-      });
-    }
-
-    if (fullscreenDrawer) {
-      _showFullscreenSideDrawer(
-        context,
-        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
-          child: Obx(() {
-            final current = controller.currentAudioTrackDisplayLabel;
-            return _buildFullscreenDrawerSection(
-              title: '音轨',
-              subtitle: '当前：$current',
-              child: buildBody(ctx, compact: true),
-            );
-          }),
-        ),
-      );
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => buildContent(ctx),
+      }),
     );
   }
 
@@ -1294,8 +1261,13 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       return;
     }
 
-    Widget buildBody(BuildContext ctx, {bool compact = false}) {
-      return Obx(() {
+    _showAdaptiveSettingSheet(
+      context,
+      fullscreenDrawer: fullscreenDrawer,
+      title: '字幕',
+      subtitleBuilder: () =>
+          '当前：${controller.currentSubtitleTrackDisplayLabel}',
+      bodyBuilder: (ctx, {required compact}) => Obx(() {
         final options = controller.subtitleTrackOptions;
         final current = controller.currentSubtitleTrack.value;
         return Column(
@@ -1321,44 +1293,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               })
               .toList(growable: false),
         );
-      });
-    }
-
-    Widget buildContent(BuildContext ctx) {
-      return Obx(() {
-        final current = controller.currentSubtitleTrackDisplayLabel;
-        return _buildStandardBottomSheet(
-          context: ctx,
-          title: '字幕',
-          subtitle: '当前：$current',
-          child: buildBody(ctx),
-        );
-      });
-    }
-
-    if (fullscreenDrawer) {
-      _showFullscreenSideDrawer(
-        context,
-        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
-          child: Obx(() {
-            final current = controller.currentSubtitleTrackDisplayLabel;
-            return _buildFullscreenDrawerSection(
-              title: '字幕',
-              subtitle: '当前：$current',
-              child: buildBody(ctx, compact: true),
-            );
-          }),
-        ),
-      );
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => buildContent(ctx),
+      }),
     );
   }
 
@@ -1372,8 +1307,12 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       (value: 'sw', title: '软解', subtitle: 'CPU 解码，兼容性最好；高码率 4K 更耗电'),
     ];
 
-    Widget buildBody(BuildContext ctx) {
-      return Obx(() {
+    _showAdaptiveSettingSheet(
+      context,
+      fullscreenDrawer: fullscreenDrawer,
+      title: '解码方式',
+      subtitleBuilder: () => '切换后会重载当前视频 · 当前：${controller.decodeModeLabel}',
+      bodyBuilder: (ctx, {required compact}) => Obx(() {
         final currentMode = controller.effectiveDecodeMode;
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -1393,38 +1332,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               })
               .toList(growable: false),
         );
-      });
-    }
-
-    Widget buildContent(BuildContext ctx) {
-      return _buildStandardBottomSheet(
-        context: ctx,
-        title: '解码方式',
-        subtitle: '切换后会重载当前视频 · 当前：${controller.decodeModeLabel}',
-        child: buildBody(ctx),
-      );
-    }
-
-    if (fullscreenDrawer) {
-      _showFullscreenSideDrawer(
-        context,
-        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
-          child: _buildFullscreenDrawerSection(
-            title: '解码方式',
-            subtitle: '切换后会重载当前视频 · 当前：${controller.decodeModeLabel}',
-            child: buildBody(ctx),
-          ),
-        ),
-      );
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => buildContent(ctx),
+      }),
     );
   }
 
@@ -1442,8 +1350,13 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       (value: '302_redirect', title: '302', subtitle: '直连转码，仅本地播放；投屏不支持'),
     ];
 
-    Widget buildBody(BuildContext ctx) {
-      return Obx(() {
+    _showAdaptiveSettingSheet(
+      context,
+      fullscreenDrawer: fullscreenDrawer,
+      title: '当前播放模式',
+      subtitleBuilder: () =>
+          '切换后会重载当前视频，并对后续选集生效 · 当前：${controller.effectivePlaybackProxyModeLabel}',
+      bodyBuilder: (ctx, {required compact}) => Obx(() {
         final currentMode = controller.effectivePlaybackProxyMode;
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -1465,44 +1378,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               })
               .toList(growable: false),
         );
-      });
-    }
-
-    Widget buildContent(BuildContext ctx) {
-      return Obx(() {
-        return _buildStandardBottomSheet(
-          context: ctx,
-          title: '当前播放模式',
-          subtitle:
-              '切换后会重载当前视频，并对后续选集生效 · 当前：${controller.effectivePlaybackProxyModeLabel}',
-          child: buildBody(ctx),
-        );
-      });
-    }
-
-    if (fullscreenDrawer) {
-      _showFullscreenSideDrawer(
-        context,
-        childBuilder: (ctx) => _buildFullscreenDrawerContainer(
-          child: Obx(() {
-            return _buildFullscreenDrawerSection(
-              title: '当前播放模式',
-              subtitle:
-                  '切换后会重载当前视频，并对后续选集生效 · 当前：${controller.effectivePlaybackProxyModeLabel}',
-              child: buildBody(ctx),
-            );
-          }),
-        ),
-      );
-      return;
-    }
-
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => buildContent(ctx),
+      }),
     );
   }
 

@@ -75,10 +75,12 @@ class MediaHistoryRepository {
   Future<MediaHistoryEntry> create({
     required MediaHistoryRecordPayload payload,
     required int userId,
+    bool suppressErrorToast = false,
   }) {
     return _httpClient.post<MediaHistoryEntry>(
       'userMediaHistory',
       data: payload.toJson(userId: userId),
+      showErrorToast: !suppressErrorToast,
       decoder: _decodeEntryOrThrow,
     );
   }
@@ -87,10 +89,12 @@ class MediaHistoryRepository {
     required int id,
     required MediaHistoryRecordPayload payload,
     required int userId,
+    bool suppressErrorToast = false,
   }) {
     return _httpClient.put<MediaHistoryEntry>(
       'userMediaHistory/$id',
       data: payload.toJson(userId: userId),
+      showErrorToast: !suppressErrorToast,
       decoder: _decodeEntryOrThrow,
     );
   }

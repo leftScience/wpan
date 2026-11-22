@@ -115,12 +115,17 @@ class MediaHistoryService extends GetxService {
       current ??= await _ensureEntryLoaded(cacheKey, userId, type, folder);
       MediaHistoryEntry updated;
       if (current == null || current.id == null) {
-        updated = await _repository.create(payload: payload, userId: userId);
+        updated = await _repository.create(
+          payload: payload,
+          userId: userId,
+          suppressErrorToast: true,
+        );
       } else {
         updated = await _repository.update(
           id: current.id!,
           payload: payload,
           userId: userId,
+          suppressErrorToast: true,
         );
       }
       var resolved = _withFallbackId(updated, current?.id);
@@ -129,6 +134,7 @@ class MediaHistoryService extends GetxService {
           userId: userId,
           applicationType: type,
           folderPath: folder,
+          suppressErrorToast: true,
         );
         if (refreshed != null) {
           resolved = _withFallbackId(refreshed, current?.id);

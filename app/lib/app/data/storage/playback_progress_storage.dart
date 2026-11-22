@@ -112,16 +112,18 @@ class PlaybackProgressStorage {
     if (folder.isEmpty || item.isEmpty) {
       return;
     }
-    await service.saveProgress(
-      applicationType: _applicationType,
-      folderPath: folder,
-      itemTitle: item,
-      position: position,
-      itemPath: normalizedPath,
-      duration: duration,
-      coverUrl: coverUrl,
-      extra: extra,
-    );
+    try {
+      await service.saveProgress(
+        applicationType: _applicationType,
+        folderPath: folder,
+        itemTitle: item,
+        position: position,
+        itemPath: normalizedPath,
+        duration: duration,
+        coverUrl: coverUrl,
+        extra: extra,
+      );
+    } catch (_) {}
   }
 
   Future<PlaybackProgress?> readProgress(String folderPath) async {
