@@ -2215,7 +2215,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                         color: AppThemeColors.surfaceSunken,
                         child: const PlaylistLoadingView(
                           message: '正在加载播放列表...',
-                          accentColor: Color(0xFF2563FF),
+                          accentColor: AppThemeColors.primary,
                         ),
                       );
                     }
