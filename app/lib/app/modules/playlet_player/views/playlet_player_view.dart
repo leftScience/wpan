@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -159,119 +160,184 @@ class _PlayletPlayerViewState extends State<PlayletPlayerView>
       builder: (ctx) {
         return SafeArea(
           top: false,
-          child: Container(
-            height: 0.62.sh,
-            decoration: BoxDecoration(
-              color: AppThemeColors.surface,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(18.r)),
-            ),
-            child: Column(
-              children: [
-                SizedBox(height: 10.h),
-                Container(
-                  width: 52.w,
-                  height: 4.h,
-                  decoration: BoxDecoration(
-                    color: AppThemeColors.borderStrong,
-                    borderRadius: BorderRadius.circular(999.r),
+          child: ClipRRect(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26.r)),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: Container(
+                height: 0.64.sh,
+                decoration: BoxDecoration(
+                  color: AppThemeColors.surface.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(26.r),
+                  ),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    width: 1.2,
                   ),
                 ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(16.w, 14.h, 10.w, 10.h),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Obx(
-                          () => Text(
-                            _episodeSummary(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: AppThemeColors.textPrimary,
-                              fontSize: 17.sp,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
+                child: Column(
+                  children: [
+                    SizedBox(height: 10.h),
+                    Container(
+                      width: 42.w,
+                      height: 4.h,
+                      decoration: BoxDecoration(
+                        color: AppThemeColors.borderStrong,
+                        borderRadius: BorderRadius.circular(999.r),
                       ),
-                      IconButton(
-                        tooltip: '定位当前集',
-                        onPressed: scrollToCurrentEpisode,
-                        icon: const Icon(
-                          Icons.my_location_rounded,
-                          color: AppThemeColors.textSecondary,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        icon: const Icon(
-                          Icons.close,
-                          color: AppThemeColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, color: AppThemeColors.border),
-                Expanded(
-                  child: Obx(() {
-                    final total = controller.episodes.length;
-                    final current = controller.currentIndex.value;
-                    return GridView.builder(
-                      controller: scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        14.h,
-                        horizontalPadding,
-                        14.h,
-                      ),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        mainAxisSpacing: mainSpacing,
-                        crossAxisSpacing: crossSpacing,
-                        childAspectRatio: cellAspectRatio,
-                      ),
-                      itemCount: total,
-                      itemBuilder: (context, index) {
-                        final selected = index == current;
-                        return InkWell(
-                          borderRadius: BorderRadius.circular(12.r),
-                          onTap: () async {
-                            await controller.playAt(index);
-                            if (ctx.mounted) {
-                              Navigator.of(ctx).pop();
-                            }
-                          },
-                          child: Container(
+                    ),
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(18.w, 12.h, 14.w, 10.h),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 34.w,
+                            height: 34.w,
                             decoration: BoxDecoration(
-                              color: selected
-                                  ? AppThemeColors.surfaceSunken
-                                  : AppThemeColors.surfaceMuted,
-                              borderRadius: BorderRadius.circular(12.r),
-                              border: Border.all(
-                                color: selected
-                                    ? AppThemeColors.primary
-                                    : AppThemeColors.border,
+                              shape: BoxShape.circle,
+                              color: AppThemeColors.primary.withValues(
+                                alpha: 0.16,
                               ),
                             ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              '${index + 1}',
-                              style: TextStyle(
-                                color: selected
-                                    ? AppThemeColors.primary
-                                    : AppThemeColors.textPrimary,
-                                fontSize: 17.sp,
-                                fontWeight: FontWeight.w600,
+                            child: Icon(
+                              Icons.bolt_rounded,
+                              color: AppThemeColors.primary,
+                              size: 19.r,
+                            ),
+                          ),
+                          SizedBox(width: 10.w),
+                          Expanded(
+                            child: Obx(
+                              () => Text(
+                                _episodeSummary(),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: AppThemeColors.textPrimary,
+                                  fontSize: 16.5.sp,
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
                             ),
                           ),
+                          IconButton(
+                            tooltip: '定位当前集',
+                            onPressed: scrollToCurrentEpisode,
+                            icon: const Icon(
+                              Icons.my_location_rounded,
+                              color: AppThemeColors.textSecondary,
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.of(ctx).pop(),
+                            child: Container(
+                              width: 38.w,
+                              height: 38.w,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppThemeColors.border,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: AppThemeColors.textPrimary,
+                                size: 22.r,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: AppThemeColors.divider),
+                    Expanded(
+                      child: Obx(() {
+                        final total = controller.episodes.length;
+                        final current = controller.currentIndex.value;
+                        return GridView.builder(
+                          controller: scrollController,
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            14.h,
+                            horizontalPadding,
+                            14.h,
+                          ),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: crossAxisCount,
+                                mainAxisSpacing: mainSpacing,
+                                crossAxisSpacing: crossSpacing,
+                                childAspectRatio: cellAspectRatio,
+                              ),
+                          itemCount: total,
+                          itemBuilder: (context, index) {
+                            final selected = index == current;
+                            return InkWell(
+                              borderRadius: BorderRadius.circular(14.r),
+                              onTap: () async {
+                                await controller.playAt(index);
+                                if (ctx.mounted) {
+                                  Navigator.of(ctx).pop();
+                                }
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 180),
+                                decoration: BoxDecoration(
+                                  gradient: selected
+                                      ? const LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: [
+                                            AppThemeColors.primary,
+                                            AppThemeColors.primaryDeep,
+                                          ],
+                                        )
+                                      : null,
+                                  color: selected
+                                      ? null
+                                      : AppThemeColors.surfaceMuted,
+                                  borderRadius: BorderRadius.circular(14.r),
+                                  border: Border.all(
+                                    color: selected
+                                        ? AppThemeColors.primary
+                                        : AppThemeColors.border,
+                                  ),
+                                  boxShadow: selected
+                                      ? [
+                                          BoxShadow(
+                                            color: AppThemeColors.primary
+                                                .withValues(alpha: 0.26),
+                                            blurRadius: 10,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ]
+                                      : null,
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  '${index + 1}',
+                                  style: TextStyle(
+                                    color: selected
+                                        ? Colors.white
+                                        : AppThemeColors.textPrimary,
+                                    fontSize: 16.sp,
+                                    fontWeight: selected
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
                         );
-                      },
-                    );
-                  }),
+                      }),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         );
@@ -597,16 +663,32 @@ backgroundColor: const Color(0xFF050505),
             bottom: false,
             child: Align(
               alignment: Alignment.topLeft,
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: () => Navigator.of(context).maybePop(),
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  ),
-                  SizedBox(width: 4.w),
-                  Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8.h),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(14.w, 8.h, 14.w, 8.h),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).maybePop(),
+                      child: Container(
+                        width: 40.w,
+                        height: 40.w,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.black.withValues(alpha: 0.38),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.24),
+                          ),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.arrow_back_rounded,
+                          color: Colors.white,
+                          size: 20.r,
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 10.w),
+                    Expanded(
                       child: Obx(
                         () => MediaPlayerHeaderTitle(
                           title: _title(),
@@ -615,54 +697,65 @@ backgroundColor: const Color(0xFF050505),
                         ),
                       ),
                     ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.only(left: 8.w, right: 12.w),
-                    child: Obx(() {
+                    SizedBox(width: 8.w),
+                    Obx(() {
                       final hasEpisodes = controller.episodes.isNotEmpty;
                       return Opacity(
                         opacity: hasEpisodes ? 1.0 : 0.55,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(18.r),
-                            onTap: hasEpisodes
-                                ? () => _showEpisodeSheet(context)
-                                : null,
-                            child: Container(
-                              height: 36.h,
-                              padding: EdgeInsets.symmetric(horizontal: 12.w),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(18.r),
-                                border: Border.all(color: Colors.white24),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    _currentEpisodeLabel(),
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14.sp,
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                        child: GestureDetector(
+                          onTap: hasEpisodes
+                              ? () => _showEpisodeSheet(context)
+                              : null,
+                          child: Container(
+                            height: 38.h,
+                            padding: EdgeInsets.symmetric(horizontal: 14.w),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppThemeColors.primary.withValues(
+                                    alpha: 0.72,
                                   ),
-                                  SizedBox(width: 2.w),
-                                  Icon(
-                                    Icons.keyboard_arrow_down_rounded,
-                                    color: Colors.white70,
-                                    size: 20.w,
+                                  AppThemeColors.primaryDeep.withValues(
+                                    alpha: 0.72,
                                   ),
                                 ],
                               ),
+                              borderRadius: BorderRadius.circular(999.r),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.35),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.video_library_rounded,
+                                  color: Colors.white,
+                                  size: 15.r,
+                                ),
+                                SizedBox(width: 5.w),
+                                Text(
+                                  _currentEpisodeLabel(),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13.5.sp,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                SizedBox(width: 2.w),
+                                Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  color: Colors.white,
+                                  size: 18.r,
+                                ),
+                              ],
                             ),
                           ),
                         ),
                       );
                     }),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

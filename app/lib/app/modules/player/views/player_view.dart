@@ -10,6 +10,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:volume_controller/volume_controller.dart';
 
 import '../../../theme/app_theme.dart';
+import '../../../widgets/home_style_backdrop.dart';
 import '../../../widgets/media_player_header_title.dart';
 import '../../../widgets/playlist_loading_view.dart';
 import '../../../services/android_pip_service.dart';
@@ -40,6 +41,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   bool _gestureMediaLoaded = false;
   bool _gestureBrightnessChanged = false;
   final RxBool _lockButtonVisible = true.obs;
+  final RxBool _isEpisodeGridMode = false.obs;
 
   static const _speeds = <double>[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
   static const _speedBoostDelay = Duration(milliseconds: 260);
@@ -84,6 +86,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     _cancelSpeedBoost();
     _cancelLockButtonHideTimer();
     _lockButtonVisible.close();
+    _isEpisodeGridMode.close();
     _pipAspectRatioWorker?.dispose();
     _volumeController.showSystemUI = true;
     unawaited(_androidPipService.setEnabled(enabled: false));
@@ -240,7 +243,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         return IconButton(
           onPressed: () => unawaited(_togglePlayerFullscreen(context)),
           icon: Icon(
-            fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            fullscreen
+                ? Icons.fullscreen_exit_rounded
+                : Icons.fullscreen_rounded,
           ),
           iconSize: 28,
           color: Colors.white,
@@ -349,7 +354,11 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                  const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                   SizedBox(width: 4.w),
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: 280.w),
@@ -378,21 +387,23 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         children: [
           _buildActionIcon(
             enabled: controller.canCastCurrentEpisode,
-            icon: controller.isCasting ? Icons.cast_connected : Icons.cast,
+            icon: controller.isCasting
+                ? Icons.connected_tv_rounded
+                : Icons.airplay_rounded,
             onTap: () => unawaited(controller.castCurrentEpisode()),
           ),
           SizedBox(width: 8.w),
           if (controller.isCasting) ...[
             _buildActionIcon(
               enabled: true,
-              icon: Icons.stop_screen_share_outlined,
+              icon: Icons.stop_screen_share_rounded,
               onTap: () => unawaited(controller.stopCasting()),
             ),
             SizedBox(width: 8.w),
           ],
           _buildActionIcon(
             enabled: true,
-            icon: Icons.format_list_bulleted,
+            icon: Icons.queue_play_next_rounded,
             onTap: () => _showEpisodeSheet(context, compact: true),
           ),
         ],
@@ -549,46 +560,60 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     required IconData icon,
     required String label,
     required String value,
+    bool isActive = false,
     VoidCallback? onTap,
   }) {
-    final textStyle = TextStyle(
-      color: AppThemeColors.textPrimary,
-      fontSize: 13.sp,
-      height: 1,
-      fontWeight: FontWeight.w600,
-    );
-    final child = Container(
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+    final textColor = isActive
+        ? AppThemeColors.primary
+        : AppThemeColors.textPrimary;
+    final labelColor = isActive
+        ? AppThemeColors.primary
+        : AppThemeColors.textMuted;
+    final child = AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      padding: EdgeInsets.symmetric(horizontal: 11.w, vertical: 6.h),
       decoration: BoxDecoration(
-        color: AppThemeColors.surface,
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(color: AppThemeColors.border),
+        color: isActive
+            ? AppThemeColors.primary.withValues(alpha: 0.1)
+            : AppThemeColors.surface,
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(
+          color: isActive
+              ? AppThemeColors.primary.withValues(alpha: 0.35)
+              : AppThemeColors.border,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(icon, size: 16.sp, color: AppThemeColors.textMuted),
-          SizedBox(width: 6.w),
+          Icon(icon, size: 15.r, color: labelColor),
+          SizedBox(width: 5.w),
           ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 160.w),
+            constraints: BoxConstraints(maxWidth: 150.w),
             child: Text.rich(
               TextSpan(
                 children: [
                   TextSpan(
                     text: '$label ',
-                    style: textStyle.copyWith(
-                      color: AppThemeColors.textSecondary,
+                    style: TextStyle(
+                      color: labelColor,
+                      fontSize: 12.sp,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                  TextSpan(text: value, style: textStyle),
+                  TextSpan(
+                    text: value,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 12.sp,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               softWrap: false,
-              textAlign: TextAlign.center,
             ),
           ),
         ],
@@ -598,8 +623,77 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     if (onTap == null) return child;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12.r),
+      borderRadius: BorderRadius.circular(10.r),
       child: child,
+    );
+  }
+
+  /// 网格选集视图
+  Widget _buildPortraitEpisodeGrid(List<int> indices, int selectedIndex) {
+    return GridView.builder(
+      controller: _episodeScrollController,
+      padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 20.h),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4,
+        mainAxisSpacing: 10.h,
+        crossAxisSpacing: 10.w,
+        childAspectRatio: 1.55,
+      ),
+      itemCount: indices.length,
+      itemBuilder: (context, i) {
+        final episodeIndex = indices[i];
+        final selected = episodeIndex == selectedIndex;
+        final label = _simplifyEpisodeTitle(
+          controller.episodes[episodeIndex].title,
+        );
+        return InkWell(
+          borderRadius: BorderRadius.circular(12.r),
+          onTap: () => unawaited(controller.playAt(episodeIndex)),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: EdgeInsets.symmetric(horizontal: 6.w),
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppThemeColors.primary.withValues(alpha: 0.12)
+                  : AppThemeColors.surfaceMuted,
+              borderRadius: BorderRadius.circular(12.r),
+              border: Border.all(
+                color: selected
+                    ? AppThemeColors.primary.withValues(alpha: 0.45)
+                    : AppThemeColors.border,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (selected) ...[
+                  Icon(
+                    Icons.play_arrow_rounded,
+                    color: AppThemeColors.primary,
+                    size: 15.r,
+                  ),
+                  SizedBox(width: 2.w),
+                ],
+                Flexible(
+                  child: Text(
+                    label.isNotEmpty ? label : '第${episodeIndex + 1}集',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected
+                          ? AppThemeColors.primary
+                          : AppThemeColors.textPrimary,
+                      fontSize: 12.5.sp,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -622,17 +716,16 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           height: _episodeListItemExtent.h,
-          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
           decoration: BoxDecoration(
             color: selected
-                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+                ? AppThemeColors.primary.withValues(alpha: 0.1)
                 : AppThemeColors.surface,
             borderRadius: BorderRadius.circular(14.r),
             border: Border.all(
               color: selected
-                  ? Theme.of(context).colorScheme.primary
+                  ? AppThemeColors.primary.withValues(alpha: 0.4)
                   : AppThemeColors.border,
-              width: selected ? 1.2 : 1,
             ),
           ),
           child: Row(
@@ -643,20 +736,24 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: selected
-                      ? Theme.of(context).colorScheme.primary
-                      : AppThemeColors.surfaceSunken,
+                      ? AppThemeColors.primary.withValues(alpha: 0.16)
+                      : AppThemeColors.surfaceMuted,
                   borderRadius: BorderRadius.circular(10.r),
                 ),
-                child: Text(
-                  '${episodeIndex + 1}',
-                  style: TextStyle(
-                    color: selected
-                        ? Colors.white
-                        : AppThemeColors.textSecondary,
-                    fontSize: 12.sp,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                child: selected
+                    ? Icon(
+                        Icons.graphic_eq_rounded,
+                        color: AppThemeColors.primary,
+                        size: 18.r,
+                      )
+                    : Text(
+                        '${episodeIndex + 1}',
+                        style: TextStyle(
+                          color: AppThemeColors.textSecondary,
+                          fontSize: 12.sp,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
               ),
               SizedBox(width: 12.w),
               Expanded(
@@ -669,39 +766,42 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: AppThemeColors.textPrimary,
+                        color: selected
+                            ? AppThemeColors.primary
+                            : AppThemeColors.textPrimary,
                         fontSize: 14.sp,
                         fontWeight: selected
                             ? FontWeight.w700
-                            : FontWeight.w600,
+                            : FontWeight.w500,
                       ),
                     ),
                     if (subtitle.isNotEmpty) ...[
-                      SizedBox(height: 4.h),
+                      SizedBox(height: 3.h),
                       Text(
                         subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: AppThemeColors.textSecondary,
-                          fontSize: 11.sp,
-                          fontWeight: FontWeight.w500,
+                          color: AppThemeColors.textMuted,
+                          fontSize: 11.5.sp,
+                          fontWeight: FontWeight.w400,
                         ),
                       ),
                     ],
                   ],
                 ),
               ),
-              SizedBox(width: 10.w),
-              Icon(
-                selected
-                    ? Icons.play_circle_fill_rounded
-                    : Icons.chevron_right_rounded,
-                color: selected
-                    ? Theme.of(context).colorScheme.primary
-                    : AppThemeColors.textDisabled,
-                size: selected ? 22.sp : 20.sp,
-              ),
+              if (selected) ...[
+                SizedBox(width: 8.w),
+                Text(
+                  '播放中',
+                  style: TextStyle(
+                    color: AppThemeColors.primary,
+                    fontSize: 11.5.sp,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -737,7 +837,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                   onPressed: () =>
                       _scrollEpisodeSheetToCurrent(scrollController),
                   icon: Icon(
-                    Icons.my_location,
+                    Icons.my_location_rounded,
                     color: AppThemeColors.textSecondary,
                     size: compact ? 18 : 20,
                   ),
@@ -747,7 +847,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                   return TextButton.icon(
                     onPressed: controller.toggleEpisodeOrder,
                     icon: Icon(
-                      asc ? Icons.arrow_downward : Icons.arrow_upward,
+                      asc
+                          ? Icons.arrow_downward_rounded
+                          : Icons.arrow_upward_rounded,
                       color: AppThemeColors.textPrimary,
                       size: compact ? 16 : 18,
                     ),
@@ -764,7 +866,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                   IconButton(
                     onPressed: () => Navigator.of(panelContext).pop(),
                     icon: Icon(
-                      Icons.close,
+                      Icons.close_rounded,
                       color: AppThemeColors.textSecondary,
                       size: compact ? 20 : 24,
                     ),
@@ -1916,23 +2018,26 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     required IconData icon,
     required VoidCallback onTap,
     String? tooltip,
+    bool isActive = false,
   }) {
     final button = Opacity(
       opacity: enabled ? 1.0 : 0.38,
-      child: Material(
-        color: AppThemeColors.surfaceSunken,
-        borderRadius: BorderRadius.circular(14.r),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14.r),
-          onTap: enabled ? onTap : null,
-          child: Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14.r),
-              border: Border.all(color: AppThemeColors.border),
-            ),
-            child: Icon(icon, color: AppThemeColors.textPrimary, size: 18),
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          width: 42.w,
+          height: 42.w,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isActive
+                ? AppThemeColors.primary.withValues(alpha: 0.24)
+                : AppThemeColors.primary.withValues(alpha: 0.14),
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            icon,
+            color: isActive ? AppThemeColors.primary : AppThemeColors.textPrimary,
+            size: 20.r,
           ),
         ),
       ),
@@ -2016,38 +2121,57 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     return Scaffold(
       backgroundColor: AppThemeColors.pageBackground,
       appBar: AppBar(
-        backgroundColor: AppThemeColors.surface,
-        toolbarHeight: 56,
-        leadingWidth: 40,
-        leading: IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          visualDensity: VisualDensity.compact,
-          onPressed: () => Navigator.of(context).maybePop(),
-          icon: const Icon(
-            Icons.arrow_back,
-            color: AppThemeColors.textPrimary,
-            size: 20,
-          ),
-        ),
-        titleSpacing: 0,
-        title: Obx(
-          () => Align(
-            alignment: Alignment.centerLeft,
-            child: MediaPlayerHeaderTitle(
-              title: controller.resourceTitle.value,
-              titleColor: AppThemeColors.textPrimary,
-              fallbackTitle: '影视',
+        backgroundColor: Colors.transparent,
+        toolbarHeight: 58,
+        leadingWidth: 64.w,
+        leading: Padding(
+          padding: EdgeInsets.only(left: 16.w, top: 6.h, bottom: 6.h),
+          child: GestureDetector(
+            onTap: () => Navigator.of(context).maybePop(),
+            child: Container(
+              width: 42.w,
+              height: 42.w,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppThemeColors.primary.withValues(alpha: 0.19),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                Icons.arrow_back_rounded,
+                color: AppThemeColors.textPrimary,
+                size: 20.r,
+              ),
             ),
           ),
         ),
+        titleSpacing: 4.w,
+        title: Obx(() {
+          final currentIdx = controller.currentIndex.value;
+          final total = controller.episodes.length;
+          final subtitle = total > 0 && currentIdx >= 0 && currentIdx < total
+              ? '正在播放：第 ${currentIdx + 1} / $total 集'
+              : null;
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: MediaPlayerHeaderTitle(
+              title: controller.resourceTitle.value,
+              subtitle: subtitle,
+              titleColor: AppThemeColors.textPrimary,
+              subtitleColor: AppThemeColors.textMuted,
+              fallbackTitle: '影视',
+            ),
+          );
+        }),
         actions: [
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Obx(() {
             return _buildAppBarActionIcon(
               enabled: controller.canCastCurrentEpisode,
-              icon: controller.isCasting ? Icons.cast_connected : Icons.cast,
+              icon: controller.isCasting
+                  ? Icons.connected_tv_rounded
+                  : Icons.airplay_rounded,
               tooltip: controller.isCasting ? '投屏中' : '投屏',
+              isActive: controller.isCasting,
               onTap: () => unawaited(controller.castCurrentEpisode()),
             );
           }),
@@ -2060,32 +2184,37 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                   enabled: true,
                   icon: Icons.stop_screen_share_outlined,
                   tooltip: '停止投屏',
+                  isActive: true,
                   onTap: () => unawaited(controller.stopCasting()),
                 ),
               ],
             );
           }),
-          const SizedBox(width: 10),
+          const SizedBox(width: 14),
         ],
       ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final maxWidth = constraints.maxWidth;
-            final maxHeight = constraints.maxHeight;
-            final isCompactHeight =
-                maxWidth > maxHeight && maxHeight.isFinite && maxHeight > 0;
-            final preferredVideoHeight = maxWidth * 9.0 / 16.0;
-            final videoHeight = maxHeight.isFinite && maxHeight > 0
-                ? math.min(preferredVideoHeight, maxHeight)
-                : preferredVideoHeight;
+      body: Stack(
+        children: [
+          const HomeStyleBackdrop(),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final maxWidth = constraints.maxWidth;
+                final maxHeight = constraints.maxHeight;
+                final isCompactHeight =
+                    maxWidth > maxHeight && maxHeight.isFinite && maxHeight > 0;
+                final videoCardWidth = maxWidth;
+                final preferredVideoHeight = videoCardWidth * 9.0 / 16.0;
+                final videoHeight = maxHeight.isFinite && maxHeight > 0
+                    ? math.min(preferredVideoHeight, maxHeight)
+                    : preferredVideoHeight;
 
-            return Column(
-              children: [
-                SizedBox(
-                  width: maxWidth,
-                  height: videoHeight,
-                  child: Obx(() {
+                return Column(
+                  children: [
+                    SizedBox(
+                      width: videoCardWidth,
+                      height: videoHeight,
+                      child: Obx(() {
                     if (controller.isLoadingPlaylist.value) {
                       return Container(
                         color: AppThemeColors.surfaceSunken,
@@ -2279,194 +2408,322 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                     );
                   }),
                 ),
-                if (!isCompactHeight) SizedBox(height: 10.h),
-                if (!isCompactHeight)
-                  Expanded(
-                    child: Obx(() {
-                      if (controller.isFullscreen.value) {
-                        return const SizedBox.shrink();
-                      }
-                      final currentRate = _formatRate(
-                        controller.playbackRate.value,
-                      );
-                      return Padding(
-                        padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 12.h),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+            if (!isCompactHeight) SizedBox(height: 10.h),
+            if (!isCompactHeight)
+              Expanded(
+                child: Obx(() {
+                  if (controller.isFullscreen.value) {
+                    return const SizedBox.shrink();
+                  }
+                  final currentRate = _formatRate(
+                    controller.playbackRate.value,
+                  );
+                  final hasSkip =
+                      controller.skipIntro.value > Duration.zero ||
+                      controller.skipOutro.value > Duration.zero;
+                  final skipText = hasSkip
+                      ? '${controller.skipIntro.value.inSeconds}s/${controller.skipOutro.value.inSeconds}s'
+                      : '未设';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 1. 横向快捷功能栏
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 16.w,
+                          vertical: 2.h,
+                        ),
+                        child: Row(
                           children: [
-                            Wrap(
-                              spacing: 8.w,
-                              runSpacing: 8.h,
-                              children: [
-                                _buildInfoPill(
-                                  icon: Icons.update_rounded,
-                                  label: '更新',
-                                  value: _episodeCountLabel(),
-                                ),
-                                if (controller
-                                    .canSwitchCurrentPlaybackProxyMode)
-                                  _buildInfoPill(
-                                    icon: Icons.route_rounded,
-                                    label: '播放',
-                                    value: controller
-                                        .effectivePlaybackProxyModeLabel,
-                                    onTap: () =>
-                                        _showPlaybackProxyModeSheet(context),
-                                  ),
-                                if (controller.canSwitchAudioTrack)
-                                  _buildInfoPill(
-                                    icon: Icons.audiotrack_rounded,
-                                    label: '音轨',
-                                    value: controller
-                                        .currentAudioTrackDisplayLabel,
-                                    onTap: () => _showAudioTrackSheet(context),
-                                  ),
-                                if (controller.canSwitchSubtitleTrack)
-                                  _buildInfoPill(
-                                    icon: Icons.subtitles_rounded,
-                                    label: '字幕',
-                                    value: controller
-                                        .currentSubtitleTrackDisplayLabel,
-                                    onTap: () =>
-                                        _showSubtitleTrackSheet(context),
-                                  ),
-                                _buildInfoPill(
-                                  icon: Icons.memory_rounded,
-                                  label: '解码',
-                                  value: controller.decodeModeLabel,
-                                  onTap: () => _showDecodeModeSheet(context),
-                                ),
-                                _buildInfoPill(
-                                  icon: Icons.speed_rounded,
-                                  label: '倍速',
-                                  value: currentRate,
-                                  onTap: () => _showPlaybackRateSheet(context),
-                                ),
-                              ],
+                            _buildInfoPill(
+                              icon: Icons.speed_rounded,
+                              label: '倍速',
+                              value: currentRate,
+                              isActive:
+                                  (controller.playbackRate.value - 1.0).abs() >
+                                  0.01,
+                              onTap: () => _showPlaybackRateSheet(context),
                             ),
-                            SizedBox(height: 16.h),
-                            Row(
-                              children: [
-                                Text(
-                                  '选集',
-                                  style: TextStyle(
-                                    color: AppThemeColors.textPrimary,
-                                    fontSize: 16.sp,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const Spacer(),
-                                Obx(() {
-                                  final asc =
-                                      controller.episodesAscending.value;
-                                  return TextButton.icon(
-                                    onPressed: controller.toggleEpisodeOrder,
-                                    icon: Icon(
-                                      asc
-                                          ? Icons.arrow_downward_rounded
-                                          : Icons.arrow_upward_rounded,
-                                      color: AppThemeColors.textPrimary,
-                                      size: 18.sp,
-                                    ),
-                                    label: Text(
-                                      asc ? '正序' : '倒序',
-                                      style: TextStyle(
-                                        color: AppThemeColors.textSecondary,
-                                        fontSize: 13.sp,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    style: TextButton.styleFrom(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 12.w,
-                                        vertical: 8.h,
-                                      ),
-                                      foregroundColor: AppThemeColors.primary,
-                                    ),
-                                  );
-                                }),
-                                SizedBox(width: 4.w),
-                                TextButton.icon(
-                                  onPressed: controller.episodes.isEmpty
-                                      ? null
-                                      : _scrollToCurrentEpisode,
-                                  icon: Icon(
-                                    Icons.my_location_rounded,
-                                    color: AppThemeColors.textMuted,
-                                    size: 18.sp,
-                                  ),
-                                  label: Text(
-                                    '定位',
-                                    style: TextStyle(
-                                      color: AppThemeColors.textSecondary,
-                                      fontSize: 13.sp,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  style: TextButton.styleFrom(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 12.w,
-                                      vertical: 8.h,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                            SizedBox(width: 8.w),
+                            _buildInfoPill(
+                              icon: Icons.fast_forward_rounded,
+                              label: '片头尾',
+                              value: skipText,
+                              isActive: hasSkip,
+                              onTap: () => _showSkipSettingsSheet(context),
                             ),
-                            SizedBox(height: 10.h),
-                            if (controller.episodes.isEmpty)
-                              Container(
-                                width: double.infinity,
-                                padding: EdgeInsets.symmetric(vertical: 24.h),
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: AppThemeColors.surface,
-                                  borderRadius: BorderRadius.circular(14.r),
-                                  border: Border.all(color: AppThemeColors.border),
-                                ),
-                                child: Text(
-                                  '暂无选集',
-                                  style: TextStyle(
-                                    color: AppThemeColors.textSecondary,
-                                    fontSize: 13.sp,
-                                  ),
-                                ),
-                              )
-                            else
-                              Expanded(
-                                child: Obx(() {
-                                  final indices =
-                                      controller.visibleEpisodeIndices;
-                                  final selected =
-                                      controller.currentIndex.value;
-                                  return ListView.separated(
-                                    controller: _episodeScrollController,
-                                    padding: EdgeInsets.zero,
-                                    itemCount: indices.length,
-                                    separatorBuilder: (_, _) =>
-                                        SizedBox(height: 10.h),
-                                    itemBuilder: (context, i) {
-                                      final episodeIndex = indices[i];
-                                      return _buildPortraitEpisodeTile(
-                                        episodeIndex: episodeIndex,
-                                        selected: episodeIndex == selected,
-                                        onTap: () => unawaited(
-                                          controller.playAt(episodeIndex),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                }),
+                            SizedBox(width: 8.w),
+                            _buildInfoPill(
+                              icon: Icons.developer_board_rounded,
+                              label: '解码',
+                              value: controller.decodeModeLabel,
+                              isActive:
+                                  controller.effectiveDecodeMode != 'auto',
+                              onTap: () => _showDecodeModeSheet(context),
+                            ),
+                            if (controller
+                                .canSwitchCurrentPlaybackProxyMode) ...[
+                              SizedBox(width: 8.w),
+                              _buildInfoPill(
+                                icon: Icons.hub_rounded,
+                                label: '线路',
+                                value: controller
+                                    .effectivePlaybackProxyModeLabel,
+                                onTap: () =>
+                                    _showPlaybackProxyModeSheet(context),
                               ),
+                            ],
+                            if (controller.canSwitchAudioTrack) ...[
+                              SizedBox(width: 8.w),
+                              _buildInfoPill(
+                                icon: Icons.graphic_eq_rounded,
+                                label: '音轨',
+                                value:
+                                    controller.currentAudioTrackDisplayLabel,
+                                onTap: () => _showAudioTrackSheet(context),
+                              ),
+                            ],
+                            if (controller.canSwitchSubtitleTrack) ...[
+                              SizedBox(width: 8.w),
+                              _buildInfoPill(
+                                icon: Icons.closed_caption_rounded,
+                                label: '字幕',
+                                value: controller
+                                    .currentSubtitleTrackDisplayLabel,
+                                onTap: () => _showSubtitleTrackSheet(context),
+                              ),
+                            ],
                           ],
                         ),
-                      );
-                    }),
-                  ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
+                      ),
+                      SizedBox(height: 10.h),
+                      // 3. 底部选集面板：支持「列表 / 网格」双布局切换与排序定位
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: AppThemeColors.surface,
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(20.r),
+                            ),
+                            border: Border(
+                              top: BorderSide(color: AppThemeColors.border),
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  16.w,
+                                  12.h,
+                                  16.w,
+                                  10.h,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Row(
+                                        children: [
+                                          Text(
+                                            '选集',
+                                            style: TextStyle(
+                                              color: AppThemeColors.textPrimary,
+                                              fontSize: 15.sp,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          SizedBox(width: 6.w),
+                                          Text(
+                                            _episodeCountLabel(),
+                                            style: TextStyle(
+                                              color: AppThemeColors.textMuted,
+                                              fontSize: 12.5.sp,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    // 列表 / 网格 视图切换按钮
+                                    Obx(() {
+                                      final isGrid = _isEpisodeGridMode.value;
+                                      return Tooltip(
+                                        message: isGrid
+                                            ? '切换为列表视图'
+                                            : '切换为网格视图',
+                                        child: GestureDetector(
+                                          onTap: () =>
+                                              _isEpisodeGridMode.value =
+                                                  !isGrid,
+                                          child: Container(
+                                            width: 32.w,
+                                            height: 32.w,
+                                            decoration: BoxDecoration(
+                                              color: isGrid
+                                                  ? AppThemeColors.primary
+                                                        .withValues(
+                                                          alpha: 0.12,
+                                                        )
+                                                  : AppThemeColors.surfaceMuted,
+                                              borderRadius:
+                                                  BorderRadius.circular(9.r),
+                                              border: Border.all(
+                                                color: isGrid
+                                                    ? AppThemeColors.primary
+                                                          .withValues(
+                                                            alpha: 0.35,
+                                                          )
+                                                    : AppThemeColors.border,
+                                              ),
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Icon(
+                                              isGrid
+                                                  ? Icons.view_list_rounded
+                                                  : Icons.grid_view_rounded,
+                                              color: isGrid
+                                                  ? AppThemeColors.primary
+                                                  : AppThemeColors
+                                                        .textSecondary,
+                                              size: 16.5.r,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                    SizedBox(width: 6.w),
+                                    // 正序 / 倒序 切换按钮
+                                    Obx(() {
+                                      final asc =
+                                          controller.episodesAscending.value;
+                                      return Tooltip(
+                                        message: asc
+                                            ? '当前正序（点击切为倒序）'
+                                            : '当前倒序（点击切为正序）',
+                                        child: GestureDetector(
+                                          onTap: controller.toggleEpisodeOrder,
+                                          child: Container(
+                                            width: 32.w,
+                                            height: 32.w,
+                                            decoration: BoxDecoration(
+                                              color: AppThemeColors.surfaceMuted,
+                                              borderRadius:
+                                                  BorderRadius.circular(9.r),
+                                              border: Border.all(
+                                                color: AppThemeColors.border,
+                                              ),
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Icon(
+                                              asc
+                                                  ? Icons.south_rounded
+                                                  : Icons.north_rounded,
+                                              color:
+                                                  AppThemeColors.textSecondary,
+                                              size: 15.5.r,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                    SizedBox(width: 6.w),
+                                    // 定位当前集按钮
+                                    Tooltip(
+                                      message: '定位当前播放集',
+                                      child: GestureDetector(
+                                        onTap: controller.episodes.isEmpty
+                                            ? null
+                                            : _scrollToCurrentEpisode,
+                                        child: Container(
+                                          width: 32.w,
+                                          height: 32.w,
+                                          decoration: BoxDecoration(
+                                            color: AppThemeColors.surfaceMuted,
+                                            borderRadius: BorderRadius.circular(
+                                              9.r,
+                                            ),
+                                            border: Border.all(
+                                              color: AppThemeColors.border,
+                                            ),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Icon(
+                                            Icons.my_location_rounded,
+                                            color: AppThemeColors.textSecondary,
+                                            size: 16.r,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Divider(
+                                height: 1,
+                                color: AppThemeColors.divider,
+                              ),
+                              Expanded(
+                                child: controller.episodes.isEmpty
+                                    ? Center(
+                                        child: Text(
+                                          '暂无选集',
+                                          style: TextStyle(
+                                            color: AppThemeColors.textSecondary,
+                                            fontSize: 13.sp,
+                                          ),
+                                        ),
+                                      )
+                                    : Obx(() {
+                                        final indices =
+                                            controller.visibleEpisodeIndices;
+                                        final selected =
+                                            controller.currentIndex.value;
+                                        if (_isEpisodeGridMode.value) {
+                                          return _buildPortraitEpisodeGrid(
+                                            indices,
+                                            selected,
+                                          );
+                                        }
+                                        return ListView.separated(
+                                          controller: _episodeScrollController,
+                                          padding: EdgeInsets.fromLTRB(
+                                            16.w,
+                                            12.h,
+                                            16.w,
+                                            20.h,
+                                          ),
+                                          itemCount: indices.length,
+                                          separatorBuilder: (_, _) =>
+                                              SizedBox(height: 10.h),
+                                          itemBuilder: (context, i) {
+                                            final episodeIndex = indices[i];
+                                            return _buildPortraitEpisodeTile(
+                                              episodeIndex: episodeIndex,
+                                              selected:
+                                                  episodeIndex == selected,
+                                              onTap: () => unawaited(
+                                                controller.playAt(episodeIndex),
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      }),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ),
+          ],
+        );
+      },
+    ),
+  ),
+],
+),
+);
+}
 }
