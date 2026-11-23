@@ -1,0 +1,7 @@
+# 不要提交构建产物和签名私钥
+build/
+build-out/
+*.apk
+*.idsig
+*.sha256
+keystore/

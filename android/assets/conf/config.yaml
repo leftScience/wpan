@@ -1,0 +1,46 @@
+mode:
+  develop: false #是否是开发环境
+
+DB:
+  driver: sqlite
+  dsn: ./data/ohome.db
+  MaxIdleConns: 10 #最多空闲连接数
+  MaxOpenConns: 100 #最多打开连接数
+  AutoMigrate: true
+  InitData: true
+  InitSQLPath: ./sql/init_data.sql
+  ImportInitSQLOnFirstRun: true
+
+server:
+  port: 18090
+
+logger:
+  MaxSize: 2
+  MaxBackups: 90 #切割日志文件的最大个数
+  MaxAge: 20 #切割文件保留的最长天数
+
+jwt:
+  accessTokenExpires: 1440
+  refreshTokenExpires: 14400
+  signKey: hlw123.com
+
+config:
+  defaultPassword: 123
+  allowUserRegistration: true
+
+quark:
+  transfer:
+    workers: 2 # 转存任务 worker 数
+    queueSize: 32 # 转存任务排队容量
+  stream:
+    concurrency: 3 # 本地代理并发分片数
+    partSizeMB: 10 # 本地代理分片大小（MB）
+    chunkMaxRetries: 3 # 本地代理分片重试次数
+
+update:
+  channel: stable
+  manifestUrl: "" # 手机上关闭服务端自更新
+  updater:
+    token: ohome-local-updater
+    listenAddr: 127.0.0.1:18091
+    baseUrl: http://127.0.0.1:18091

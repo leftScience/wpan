@@ -1,0 +1,65 @@
+--- a/cpu/hwcap_linux.go	2026-11-23 16:36:56.305488767 +0800
++++ b/cpu/hwcap_linux.go	2026-11-23 16:36:57.849508867 +0800
+@@ -5,7 +5,9 @@
+ package cpu
+ 
+ import (
++	"errors"
+ 	"os"
++	"runtime"
+ )
+ 
+ const (
+@@ -23,7 +25,36 @@
+ var hwCap uint
+ var hwCap2 uint
+ 
++// androidGuest 判断当前是否跑在 Android 用户态。
++// 用文件探测而不是 build tag，是因为 GOOS=linux 的二进制同样会被放到手机上跑，
++// 而文件名后缀 _linux_ 的代码在 android 目标下也会被编译进来。
++func androidGuest() bool {
++	if runtime.GOOS == "android" {
++		return true
++	}
++	// 任一条存在即可判定为 Android 用户态，全部失败才会退回探测路径
++	for _, p := range []string{
++		"/system/bin/linker64",
++		"/system/bin/linker",
++		"/system/bin/app_process64",
++		"/system/bin/app_process",
++		"/system/build.prop",
++	} {
++		if _, err := os.Stat(p); err == nil {
++			return true
++		}
++	}
++	return false
++}
++
++var errHWCAPUnavailable = errors.New("cpu: hwcap probing disabled under android")
++
+ func readHWCAP() error {
++	if androidGuest() {
++		// Android 上 /proc/self/auxv 常被 SELinux 拦截，doinit 的 MSR 回退又可能 SIGILL，
++		// 这里直接放弃探测，交给 doinit 用保守默认值。
++		return errHWCAPUnavailable
++	}
+ 	// For Go 1.21+, get auxv from the Go runtime.
+ 	if a := getAuxv(); len(a) > 0 {
+ 		for len(a) >= 2 {
+--- a/cpu/cpu_linux_arm64.go	2026-11-23 16:36:56.244487973 +0800
++++ b/cpu/cpu_linux_arm64.go	2026-11-23 16:36:57.821508502 +0800
+@@ -62,6 +62,13 @@
+ 
+ func doinit() {
+ 	if err := readHWCAP(); err != nil {
++		if androidGuest() {
++			// ARMv8-A 基线特性，避免 MSR 读取 SIGILL / 解析 cpuinfo 失败
++			ARM64.HasFP = true
++			ARM64.HasASIMD = true
++			ARM64.HasATOMICS = true
++			return
++		}
+ 		// We failed to read /proc/self/auxv. This can happen if the binary has
+ 		// been given extra capabilities(7) with /bin/setcap.
+ 		//
