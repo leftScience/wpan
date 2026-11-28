@@ -76,15 +76,24 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   bool _ready = false;
   String? _lastArgsKey;
   bool _playlistLoaded = false;
+  bool _nativePlayerConfigured = false;
+  bool _isSwitchingTrack = false;
+  bool _currentTrackHadProgress = false;
+  bool _handlingPlaybackFailure = false;
   bool _outroTriggered = false;
   bool _autoCompleting = false;
   bool _appWasBackgrounded = false;
+  int _playbackSessionToken = 0;
+  int _currentTrackRetryCount = 0;
   int _routeArgsVersion = 0;
   List<String> _supportedExtensions = const <String>[];
   final Map<String, double> _playlistSheetOffsets = <String, double>{};
   bool _blockPlaybackOnOpen = false;
 
+  static const int _maxTrackRetries = 2;
+
   Timer? _sleepTimer;
+  Timer? _retryTimer;
   DateTime? _sleepDeadline;
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<bool>? _bufferingSub;
@@ -92,6 +101,7 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   StreamSubscription<Duration>? _durationSub;
   StreamSubscription<Playlist>? _playlistSub;
   StreamSubscription<bool>? _completedSub;
+  StreamSubscription<String>? _errorSub;
 
   MusicTrack? get currentTrack {
     final list = tracks;
@@ -148,11 +158,18 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       _syncAudioPlaybackState();
     });
     _positionSub = _player.stream.position.listen((value) {
+      if (_isSwitchingTrack) return;
       position.value = value;
+      if (value > const Duration(milliseconds: 500)) {
+        _currentTrackHadProgress = true;
+        _currentTrackRetryCount = 0;
+      }
+      if (_checkSleepTimerExpired()) return;
       _handlePositionUpdate(value);
       _checkOutroSkip(value);
     });
     _durationSub = _player.stream.duration.listen((value) {
+      if (_isSwitchingTrack) return;
       duration.value = value;
       unawaited(_tryApplyPendingSeek());
       _syncAudioMediaItem();
@@ -160,28 +177,27 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     });
     _playlistSub = _player.stream.playlist.listen((playlist) {
       final sessionReady = _isIncomingPlaylistReady(playlist);
-      if (!sessionReady) {
-        _playlistLoaded = false;
-        _syncAudioPlaybackState();
-        return;
-      }
-      _playlistLoaded = true;
-      final index = playlist.index;
-      if (index >= 0 && index < tracks.length) {
-        currentIndex.value = index;
-        final path = tracks[index].path.trim();
-        _currentTrackPath = path.isEmpty ? null : path;
-        _syncAudioMediaItem();
-      } else {
-        _restoreCurrentIndexFromTrackPath();
-      }
+      _playlistLoaded = sessionReady;
       _syncAudioPlaybackState();
     });
     _completedSub = _player.stream.completed.listen((completed) {
-      if (completed) {
-        unawaited(_handleCompletedPlayback());
+      if (completed && !_isSwitchingTrack) {
+        unawaited(_handleCompletedPlayback(_playbackSessionToken));
       }
       _syncAudioPlaybackState();
+    });
+    _errorSub = _player.stream.error.listen((error) {
+      if (_isSwitchingTrack || tracks.isEmpty) return;
+      final trimmed = error.trim();
+      if (trimmed.isEmpty) return;
+      if (_currentTrackHadProgress &&
+          _player.state.playing &&
+          !_player.state.buffering) {
+        return;
+      }
+      unawaited(
+        _handleTrackPlaybackFailure(_playbackSessionToken, reason: trimmed),
+      );
     });
 
     _ready = true;
@@ -192,6 +208,14 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   void _handleResumeSessionCheck() {
+    if (_checkSleepTimerExpired()) {
+      return;
+    }
+    final deadline = _sleepDeadline;
+    if (deadline != null) {
+      final remain = deadline.difference(DateTime.now());
+      sleepRemaining.value = remain > Duration.zero ? remain : Duration.zero;
+    }
     if (tracks.isEmpty) {
       _playlistLoaded = false;
       return;
@@ -272,18 +296,13 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   bool _isIncomingPlaylistReady(Playlist playlist) {
     if (tracks.isEmpty) return false;
     final count = _playlistMediaCountOf(playlist);
-    if (count == null || count <= 0) return false;
-    return count == tracks.length;
+    return count != null && count > 0;
   }
 
   bool _isPlaylistSessionHealthy() {
     if (!_playlistLoaded || tracks.isEmpty) return false;
     final count = _playlistMediaCountOf(_player.state.playlist);
-    if (count == null || count <= 0) return false;
-    if (count != tracks.length) return false;
-    final index = _playlistIndexOf(_player.state.playlist);
-    if (index == null) return true;
-    return index >= -1 && index < tracks.length;
+    return count != null && count > 0;
   }
 
   int? _playlistMediaCountOf(Object? source) {
@@ -293,18 +312,6 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
       final dynamic medias = value.medias;
       if (medias is List) return medias.length;
       if (medias is Iterable) return medias.length;
-    } catch (_) {}
-    return null;
-  }
-
-  int? _playlistIndexOf(Object? source) {
-    if (source == null) return null;
-    try {
-      final dynamic value = source;
-      final dynamic raw = value.index;
-      if (raw is int) return raw;
-      if (raw is num) return raw.toInt();
-      if (raw is String) return int.tryParse(raw.trim());
     } catch (_) {}
     return null;
   }
@@ -795,22 +802,25 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     ];
   }
 
-  Future<bool> _ensurePlaylistLoaded({int? initialIndex}) async {
-    if (_playlistLoaded) return false;
-    if (tracks.isEmpty) return false;
+  Future<void> _configureNativePlayerIfNeeded() async {
+    if (_nativePlayerConfigured) return;
+    _nativePlayerConfigured = true;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    try {
+      await platform.setProperty('network-timeout', '30');
+    } catch (_) {}
+    try {
+      await platform.setProperty(
+        'stream-lavf-o',
+        'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
+      );
+    } catch (_) {}
+  }
 
-    final safeIndex = (initialIndex ?? currentIndex.value).clamp(
-      0,
-      tracks.length - 1,
-    );
-    final medias = tracks
-        .map((track) => Media(_resolveTrackUrlForPlayback(track)))
-        .toList(growable: false);
-    await _player.open(Playlist(medias, index: safeIndex), play: false);
-    await _player.setVolume(volume.value * 100);
-    await _player.setRate(playbackSpeed.value);
-    _playlistLoaded = true;
-    return true;
+  void _cancelPendingRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
   }
 
   Future<void> playAt(
@@ -818,50 +828,100 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     bool forceReopen = false,
     Duration? startPosition,
     bool clearResume = false,
+    bool isRetry = false,
+    bool fromAutoComplete = false,
   }) async {
     if (index < 0 || index >= tracks.length) return;
+    if (_checkSleepTimerExpired()) return;
+
+    _cancelPendingRetry();
+    final token = ++_playbackSessionToken;
+    _isSwitchingTrack = true;
+    _handlingPlaybackFailure = false;
+    _outroTriggered = false;
+    _currentTrackHadProgress = false;
+    _lastPersistedPosition = null;
+    if (!isRetry) {
+      _currentTrackRetryCount = 0;
+    }
+
+    final track = tracks[index];
+    final trackPath = track.path.trim();
+    _currentTrackPath = trackPath.isEmpty ? null : trackPath;
+    currentIndex.value = index;
+    position.value = Duration.zero;
+    duration.value = Duration.zero;
+    isBuffering.value = true;
+
+    final intro = skipIntro.value;
+    if (clearResume) {
+      _resumeTrackPath = null;
+      _resumePosition = null;
+    }
+    final resume = clearResume
+        ? null
+        : _takeResumeForTrack(_currentTrackPath);
+    final startOffset = startPosition != null
+        ? _maxDuration(intro, startPosition)
+        : _maxDuration(intro, resume);
+    _pendingSeek = startOffset > Duration.zero ? startOffset : null;
+
+    _syncAudioMediaItem();
+    _syncAudioPlaybackState();
+
     try {
       final focusAcquired = await _audioSession.activate(_audioProfile);
-      if (!focusAcquired) return;
-      if (forceReopen) {
-        _playlistLoaded = false;
+      if (_playbackSessionToken != token) return;
+      if (!focusAcquired) {
+        _isSwitchingTrack = false;
+        isBuffering.value = false;
+        _syncAudioPlaybackState();
+        return;
       }
-      final openedPlaylist = await _ensurePlaylistLoaded(initialIndex: index);
+
+      await _configureNativePlayerIfNeeded();
+      if (_playbackSessionToken != token) return;
+
+      final url = _resolveTrackUrlForPlayback(track);
+      // Load one track at a time instead of handing the whole playlist to mpv.
+      // Otherwise any transient network/audio error in lock screen causes mpv
+      // to cascade through every remaining item nonstop.
+      await _player.open(Media(url), play: true);
+      if (_playbackSessionToken != token) return;
+
+      _playlistLoaded = true;
+      _isSwitchingTrack = false;
+      final openedDuration = _player.state.duration;
+      if (openedDuration > Duration.zero && duration.value != openedDuration) {
+        duration.value = openedDuration;
+      }
+
+      await _player.setVolume(volume.value * 100);
+      await _player.setRate(playbackSpeed.value);
       await _syncPlayMode();
+      if (_playbackSessionToken != token) return;
 
-      final track = tracks[index];
-      final trackPath = track.path.trim();
-      _currentTrackPath = trackPath.isEmpty ? null : trackPath;
-      _outroTriggered = false;
-      _lastPersistedPosition = null;
-
-      final intro = skipIntro.value;
-      if (clearResume) {
-        _resumeTrackPath = null;
-        _resumePosition = null;
-      }
-      final resume = clearResume
-          ? null
-          : _takeResumeForTrack(_currentTrackPath);
-      final startOffset = startPosition != null
-          ? _maxDuration(intro, startPosition)
-          : _maxDuration(intro, resume);
-      _pendingSeek = startOffset > Duration.zero ? startOffset : null;
-
-      if (!openedPlaylist) {
-        await _player.jump(index);
-      }
-      if (startOffset <= Duration.zero && !openedPlaylist) {
-        await _player.seek(Duration.zero);
-      }
-      await _player.play();
       unawaited(_tryApplyPendingSeek());
-      currentIndex.value = index;
       _syncAudioMediaItem();
       _syncAudioPlaybackState();
     } catch (e) {
+      if (_playbackSessionToken != token) return;
+      _isSwitchingTrack = false;
+      _playlistLoaded = false;
+      isBuffering.value = false;
+      isPlaying.value = false;
+      _syncAudioPlaybackState();
+      if (fromAutoComplete && _currentTrackRetryCount < _maxTrackRetries) {
+        unawaited(
+          _handleTrackPlaybackFailure(
+            token,
+            reason: QuarkErrorHelper.toFriendlyMessage(e),
+          ),
+        );
+        return;
+      }
       await _audioSession.deactivate();
-      Get.snackbar('播放失败', QuarkErrorHelper.toFriendlyMessage(e));
+      _showForegroundSnackbar('播放失败', QuarkErrorHelper.toFriendlyMessage(e));
     }
   }
 
@@ -870,20 +930,10 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> _syncPlayMode() async {
-    switch (playMode.value) {
-      case PlayMode.sequential:
-        await _player.setShuffle(false);
-        await _player.setPlaylistMode(PlaylistMode.none);
-        break;
-      case PlayMode.single:
-        await _player.setShuffle(false);
-        await _player.setPlaylistMode(PlaylistMode.single);
-        break;
-      case PlayMode.shuffle:
-        await _player.setShuffle(false);
-        await _player.setPlaylistMode(PlaylistMode.none);
-        break;
-    }
+    // Always keep mpv in non-looping single-item mode so Dart controls
+    // sequential/single/shuffle transitions, skip intro/outro, and sleep timer.
+    await _player.setShuffle(false);
+    await _player.setPlaylistMode(PlaylistMode.none);
   }
 
   Duration _maxDuration(Duration a, Duration? b) {
@@ -927,7 +977,8 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
 
   Future<void> play() async {
     if (tracks.isEmpty) return;
-    if (!_isPlaylistSessionHealthy()) {
+    if (_checkSleepTimerExpired()) return;
+    if (!_isPlaylistSessionHealthy() || _player.state.completed) {
       _playlistLoaded = false;
       _restoreCurrentIndexFromTrackPath();
       await _primeResumeFromHistoryForCurrentTrack();
@@ -941,6 +992,7 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> pause({bool releaseAudioSession = true}) async {
+    _cancelPendingRetry();
     try {
       if (tracks.isNotEmpty) {
         await _player.pause();
@@ -964,59 +1016,199 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
 
   Future<void> playNext({bool fromAutoComplete = false}) async {
     if (tracks.isEmpty) return;
+    if (fromAutoComplete && _checkSleepTimerExpired()) return;
     final total = tracks.length;
     if (playMode.value == PlayMode.single && fromAutoComplete) {
-      await playAt(currentIndex.value);
+      await playAt(
+        currentIndex.value,
+        clearResume: true,
+        fromAutoComplete: true,
+      );
       return;
     }
 
     if (total == 1) {
-      await playAt(0);
+      await playAt(0, clearResume: true, fromAutoComplete: fromAutoComplete);
       return;
     }
 
     if (playMode.value == PlayMode.shuffle) {
-      await playAt(_randomIndex(exclude: currentIndex.value));
+      await playAt(
+        _randomIndex(exclude: currentIndex.value),
+        clearResume: true,
+        fromAutoComplete: fromAutoComplete,
+      );
       return;
     }
 
     if (playMode.value == PlayMode.sequential &&
         fromAutoComplete &&
         currentIndex.value == total - 1) {
-      await playAt(0, forceReopen: true);
+      await playAt(
+        0,
+        forceReopen: true,
+        clearResume: true,
+        fromAutoComplete: true,
+      );
       return;
     }
 
     final nextIndex = (currentIndex.value + 1) % total;
     final wrappedToStart = currentIndex.value == total - 1 && nextIndex == 0;
-    await playAt(nextIndex, forceReopen: wrappedToStart);
+    await playAt(
+      nextIndex,
+      forceReopen: wrappedToStart,
+      clearResume: true,
+      fromAutoComplete: fromAutoComplete,
+    );
   }
 
   Future<void> playPrevious() async {
     if (tracks.isEmpty) return;
     final total = tracks.length;
     if (playMode.value == PlayMode.shuffle && total > 1) {
-      await playAt(_randomIndex(exclude: currentIndex.value));
+      await playAt(_randomIndex(exclude: currentIndex.value), clearResume: true);
       return;
     }
     if (total == 1) {
-      await playAt(0);
+      await playAt(0, clearResume: true);
       return;
     }
     final prevIndex = currentIndex.value - 1 < 0
         ? total - 1
         : currentIndex.value - 1;
-    await playAt(prevIndex);
+    await playAt(prevIndex, clearResume: true);
   }
 
-  Future<void> _handleCompletedPlayback() async {
-    if (_autoCompleting) return;
+  Future<void> _handleCompletedPlayback(int token) async {
+    if (_autoCompleting || _isSwitchingTrack || token != _playbackSessionToken) {
+      return;
+    }
+    if (_checkSleepTimerExpired()) {
+      return;
+    }
+
+    final total = duration.value;
+    final currentPos = position.value;
+    final playedEnough =
+        _currentTrackHadProgress ||
+        currentPos > const Duration(milliseconds: 500) ||
+        (total > Duration.zero &&
+            currentPos >= total - const Duration(seconds: 2));
+    if (!playedEnough) {
+      // Guard against premature/empty completion events causing infinite skips.
+      await _handleTrackPlaybackFailure(token, reason: '音频流未正常加载');
+      return;
+    }
+
     _autoCompleting = true;
     try {
+      if (token != _playbackSessionToken || _checkSleepTimerExpired()) {
+        return;
+      }
+      _currentTrackRetryCount = 0;
       await playNext(fromAutoComplete: true);
     } finally {
       _autoCompleting = false;
     }
+  }
+
+  Future<void> _handleTrackPlaybackFailure(
+    int token, {
+    String? reason,
+  }) async {
+    if (token != _playbackSessionToken ||
+        _handlingPlaybackFailure ||
+        _retryTimer != null ||
+        _isSwitchingTrack ||
+        tracks.isEmpty) {
+      return;
+    }
+    if (_checkSleepTimerExpired()) {
+      return;
+    }
+
+    _handlingPlaybackFailure = true;
+    try {
+      final retryIndex = currentIndex.value;
+      if (retryIndex < 0 || retryIndex >= tracks.length) {
+        return;
+      }
+
+      if (_currentTrackRetryCount < _maxTrackRetries) {
+        _currentTrackRetryCount++;
+        final attempt = _currentTrackRetryCount;
+        final resumeFrom =
+            _currentTrackHadProgress && position.value > Duration.zero
+            ? position.value
+            : null;
+        _cancelPendingRetry();
+        final delay = Duration(seconds: attempt * 2);
+        _retryTimer = Timer(delay, () {
+          unawaited(
+            _executeTrackRetry(
+              token: token,
+              index: retryIndex,
+              resumeFrom: resumeFrom,
+            ),
+          );
+        });
+        return;
+      }
+
+      // Exhausted retries: pause/stop cleanly on the current track instead of
+      // skipping endlessly to the next episode.
+      _cancelPendingRetry();
+      _playlistLoaded = false;
+      isBuffering.value = false;
+      isPlaying.value = false;
+      try {
+        await _player.pause();
+      } catch (_) {}
+      _syncAudioPlaybackState();
+      await _audioSession.deactivate();
+      final detail = (reason ?? '').trim();
+      _showForegroundSnackbar(
+        '播放失败',
+        detail.isNotEmpty ? '当前音频加载失败，已暂停播放：$detail' : '当前音频加载失败，已暂停播放',
+      );
+    } finally {
+      _handlingPlaybackFailure = false;
+    }
+  }
+
+  Future<void> _executeTrackRetry({
+    required int token,
+    required int index,
+    required Duration? resumeFrom,
+  }) async {
+    _retryTimer = null;
+    if (token != _playbackSessionToken || tracks.isEmpty) return;
+    if (_checkSleepTimerExpired()) return;
+
+    if (_authService.isLoggedIn) {
+      try {
+        await _authService.refreshTokenSingleflight();
+      } catch (_) {}
+    }
+    if (token != _playbackSessionToken || tracks.isEmpty) return;
+    if (_checkSleepTimerExpired()) return;
+
+    await playAt(
+      index,
+      forceReopen: true,
+      startPosition: resumeFrom,
+      clearResume: true,
+      isRetry: true,
+      fromAutoComplete: true,
+    );
+  }
+
+  void _showForegroundSnackbar(String title, String message) {
+    if (_appWasBackgrounded) return;
+    try {
+      Get.snackbar(title, message);
+    } catch (_) {}
   }
 
   Future<void> seekTo(Duration value) async {
@@ -1065,9 +1257,17 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> stop() async {
+    _cancelPendingRetry();
+    _playbackSessionToken++;
+    _isSwitchingTrack = false;
+    _handlingPlaybackFailure = false;
+    _currentTrackHadProgress = false;
+    _currentTrackRetryCount = 0;
+    _playlistLoaded = false;
     try {
       await _player.stop();
       isPlaying.value = false;
+      isBuffering.value = false;
       _syncAudioPlaybackState(forceStopped: true);
     } finally {
       await _audioSession.deactivate();
@@ -1076,6 +1276,12 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
 
   Future<void> clearPlaybackSession() async {
     cancelSleepTimer();
+    _cancelPendingRetry();
+    _playbackSessionToken++;
+    _isSwitchingTrack = false;
+    _handlingPlaybackFailure = false;
+    _currentTrackHadProgress = false;
+    _currentTrackRetryCount = 0;
     try {
       await _player.stop();
     } catch (_) {}
@@ -1184,15 +1390,49 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     final remain = deadline.difference(DateTime.now());
     if (remain <= Duration.zero) {
       _handleSleepTimeout();
-    } else {
+    } else if (!_appWasBackgrounded) {
       sleepRemaining.value = remain;
     }
   }
 
+  bool _checkSleepTimerExpired() {
+    final deadline = _sleepDeadline;
+    if (deadline == null) return false;
+    if (deadline.difference(DateTime.now()) <= Duration.zero) {
+      _handleSleepTimeout();
+      return true;
+    }
+    return false;
+  }
+
   void _handleSleepTimeout() {
+    if (_sleepDeadline == null && _sleepTimer == null) return;
     cancelSleepTimer();
-    Get.snackbar('提示', '已到达定时关闭时间，播放已停止');
+    _persistCurrentPositionImmediate();
     unawaited(stop());
+    _showForegroundSnackbar('提示', '已到达定时关闭时间，播放已停止');
+  }
+
+  void _persistCurrentPositionImmediate() {
+    final folder = _folderKey;
+    final path = _currentTrackPath;
+    final currentPosition = position.value;
+    if (folder == null || folder.isEmpty) return;
+    if (path == null || path.isEmpty) return;
+    if (currentPosition <= Duration.zero) return;
+    _lastPersistedPosition = currentPosition;
+    final track = currentTrack;
+    final trackTitle = (track?.title ?? '').trim();
+    final title = trackTitle.isNotEmpty ? trackTitle : _titleFromPath(path);
+    unawaited(
+      _progressStorage.saveProgress(
+        folderPath: folder,
+        itemTitle: title,
+        itemPath: path,
+        position: currentPosition,
+        duration: duration.value,
+      ),
+    );
   }
 
   void _handlePositionUpdate(Duration currentPosition) {
@@ -1237,6 +1477,8 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     if (outro <= Duration.zero ||
         total <= Duration.zero ||
         _outroTriggered ||
+        _isSwitchingTrack ||
+        _autoCompleting ||
         tracks.isEmpty) {
       if (outro <= Duration.zero) _outroTriggered = false;
       return;
@@ -1245,9 +1487,18 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     if (threshold <= Duration.zero) return;
     if (currentPosition >= threshold) {
       _outroTriggered = true;
+      if (_checkSleepTimerExpired()) {
+        return;
+      }
       if (tracks.length <= 1) {
         if (playMode.value == PlayMode.single) {
-          unawaited(playAt(currentIndex.value));
+          unawaited(
+            playAt(
+              currentIndex.value,
+              clearResume: true,
+              fromAutoComplete: true,
+            ),
+          );
         } else {
           unawaited(stop());
         }
@@ -1406,7 +1657,9 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     bool forceStopped = false,
   }) {
     if (forceStopped || tracks.isEmpty) return AudioProcessingState.idle;
-    if (isBuffering.value) return AudioProcessingState.buffering;
+    if (_isSwitchingTrack || isBuffering.value) {
+      return AudioProcessingState.buffering;
+    }
     final total = duration.value;
     if (total > Duration.zero &&
         position.value >= total &&
@@ -1462,7 +1715,9 @@ class MusicPlayerController extends GetxController with WidgetsBindingObserver {
     _durationSub?.cancel();
     _playlistSub?.cancel();
     _completedSub?.cancel();
+    _errorSub?.cancel();
     _sleepTimer?.cancel();
+    _retryTimer?.cancel();
     unawaited(_audioSession.dispose());
     _player.dispose();
     super.onClose();

@@ -16,6 +16,8 @@ class PlaybackAudioSession {
 
   AudioSession? _session;
   Future<void>? _initialization;
+  PlaybackAudioProfile? _configuredProfile;
+  bool _isActive = false;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
   StreamSubscription<void>? _becomingNoisySubscription;
 
@@ -26,11 +28,29 @@ class PlaybackAudioSession {
   Future<bool> activate(PlaybackAudioProfile profile) async {
     final session = await _ensureSession();
     final configuration = _configurationFor(profile);
-    await session.configure(configuration);
-    return session.setActive(true, fallbackConfiguration: configuration);
+    if (_configuredProfile != profile || !session.isConfigured) {
+      await session.configure(configuration);
+      _configuredProfile = profile;
+    }
+    try {
+      final acquired = await session.setActive(
+        true,
+        fallbackConfiguration: configuration,
+      );
+      _isActive = acquired;
+      return acquired;
+    } catch (_) {
+      // On iOS lock-screen track transitions, keep playback going if the audio
+      // session was already active for this profile instead of tearing it down.
+      if (_isActive && _configuredProfile == profile) {
+        return true;
+      }
+      rethrow;
+    }
   }
 
   Future<void> deactivate() async {
+    _isActive = false;
     final session = _session;
     if (session == null) return;
     try {
@@ -76,6 +96,7 @@ class PlaybackAudioSession {
   void _handleInterruption(AudioInterruptionEvent event) {
     if (!event.begin || !_isPlaying()) return;
     if (event.type == AudioInterruptionType.duck) return;
+    _isActive = false;
     unawaited(_onPauseRequested());
   }
 

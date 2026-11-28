@@ -34,6 +34,7 @@ class _MusicPlayerViewState extends State<MusicPlayerView>
   late final AnimationController _vinylAnimController;
   Worker? _indexWorker;
   bool _isSyncingCarousel = false;
+  int _carouselSyncToken = 0;
   bool _isBottomPanelExpanded = false;
   int _bottomTabIndex = 0; // 0: 播放队列, 1: 曲目详情与章节
 
@@ -61,14 +62,29 @@ class _MusicPlayerViewState extends State<MusicPlayerView>
       if (!mounted || !_carouselController.hasClients) return;
       final currentPage = _carouselController.page?.round();
       if (currentPage == nextIndex) return;
+      final token = ++_carouselSyncToken;
       _isSyncingCarousel = true;
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      final isForeground =
+          lifecycle == null || lifecycle == AppLifecycleState.resumed;
+      if (!isForeground) {
+        _carouselController.jumpToPage(nextIndex);
+        if (token == _carouselSyncToken) {
+          _isSyncingCarousel = false;
+        }
+        return;
+      }
       _carouselController
           .animateToPage(
             nextIndex,
             duration: const Duration(milliseconds: 360),
             curve: Curves.easeOutCubic,
           )
-          .whenComplete(() => _isSyncingCarousel = false);
+          .whenComplete(() {
+            if (token == _carouselSyncToken) {
+              _isSyncingCarousel = false;
+            }
+          });
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
